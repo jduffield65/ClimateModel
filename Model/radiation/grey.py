@@ -653,7 +653,17 @@ class GreyGas:
                 axs[-1].plot(-lw_down_flux_plot[i], grey_world.p_interface,  color=lw_color)
                 axs[-1].plot(net_flux_plot[i], self.p_interface, label=r'$F_{net}$', color='#d62728')
                 axs[-1].set_xlabel(r'Radiation Flux, $F$, as fraction of Incoming Solar, $\frac{F^\odot}{4}$')
-                axs[-1].set_xlim((flux_min, flux_max))
+                flux_max_i = max([max(sw_up_flux_plot[i]), max(lw_up_flux_plot[i])])
+                flux_min_i = -max([max(sw_down_flux_plot[i]), max(lw_down_flux_plot[i])])
+                if flux_max > 5 and flux_max_i < 5:
+                    current_flux_max = 5
+                else:
+                    current_flux_max = flux_max
+                if flux_min < -5 and flux_min_i > -5:
+                    current_flux_min = -5
+                else:
+                    current_flux_min = flux_min
+                axs[-1].set_xlim((current_flux_min, current_flux_max))
                 if log_axis:
                     axs[-1].set_yscale('log')
                 axs[-1].legend()
