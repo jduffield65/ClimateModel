@@ -60,7 +60,7 @@ matplotlib.use('TkAgg')  # To make plot pop out
 
 """ Evolution with tau"""
 p1 = OpticalDepthFunctions.get_exponential_p_width(1e-5)
-p2 = OpticalDepthFunctions.get_exponential_p_width(1e-5/3, 2000)
+p2 = OpticalDepthFunctions.get_exponential_p_width(1e-5 / 3, 2000)
 tau_params_final = [100000, 6]
 tau_params = [100000, 4]
 p_max = 2000
@@ -74,19 +74,22 @@ grey_world.tau_lw_func_args = tuple(tau_params)
 grey_world.tau_sw_func_args = tuple(tau_sw_params)
 grey_world.update_grid()
 up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, \
-    correct_solution = grey_world.equilibrium_sol()
+correct_solution = grey_world.equilibrium_sol()
 t = 0
-t_end = 10*365*24*60**2
+t_end = 10 * 365 * 24 * 60 ** 2
 t_sw = t_end
 t_turn_off = t_end
 t_array = [0]
 T_array = [T_eqb.copy()]
-tau_array = [grey_world.tau.copy()]
-tau_sw_array = [grey_world.tau_sw.copy()]
+tau_array = {'lw': [grey_world.tau.copy()], 'sw': [grey_world.tau_sw.copy()]}
+flux_array = {'lw_up': [up_flux_eqb.copy()], 'lw_down': [down_flux_eqb.copy()],
+              'sw_up': [up_sw_flux_eqb.copy()], 'sw_down': [down_sw_flux_eqb.copy()]}
+# tau_array = [grey_world.tau.copy()]
+# tau_sw_array = [grey_world.tau_sw.copy()]
 changing_tau = True
 delta_net_flux_thresh = 1e-4
 while t < t_end:
-    tau_params[1] = min(tau_params[1] + 1e-8*t, tau_params_final[1])
+    tau_params[1] = min(tau_params[1] + 1e-8 * t, tau_params_final[1])
     grey_world.tau_lw_func_args = tuple(tau_params)
     if tau_params[1] == tau_params_final[1]:
         if t_sw == t_end:
@@ -96,7 +99,7 @@ while t < t_end:
         if changing_tau:
             grey_world.time_step_info['RemoveInd'] = []
             t_sw = min(t, t_sw)
-            tau_sw_params[2] = min(tau_sw_params[2] + 1e-2*(t-t_sw)/grey_world.time_step_info['dt'],
+            tau_sw_params[2] = min(tau_sw_params[2] + 1e-2 * (t - t_sw) / grey_world.time_step_info['dt'],
                                    tau_sw_params_final[2])
             grey_world.tau_sw_func_args = tuple(tau_sw_params)
     if tau_sw_params[2] == tau_sw_params_final[2]:
@@ -112,10 +115,14 @@ while t < t_end:
         changing_tau = False
     t_array.append(t)
     T_array.append(grey_world.T.copy())
-    tau_array.append(grey_world.tau.copy())
-    tau_sw_array.append(grey_world.tau_sw.copy())
+    tau_array['lw'].append(grey_world.tau.copy())
+    tau_array['sw'].append(grey_world.tau_sw.copy())
+    flux_array['lw_up'].append(grey_world.up_lw_flux.copy())
+    flux_array['lw_down'].append(grey_world.down_lw_flux.copy())
+    flux_array['sw_up'].append(grey_world.up_sw_flux.copy())
+    flux_array['sw_down'].append(grey_world.down_sw_flux.copy())
     if min(grey_world.T)[0] < 0:
         raise ValueError('Temperature is below zero')
 
-anim = grey_world.plot_animate(T_array, t_array, T_eqb, correct_solution, tau_array, tau_sw_array)
+anim = grey_world.plot_animate(T_array, t_array, T_eqb, correct_solution, tau_array, flux_array)
 plt.show()

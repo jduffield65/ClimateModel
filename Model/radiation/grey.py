@@ -491,7 +491,7 @@ class GreyGas:
             ax[2].plot(-down_lw_no_sw / F_norm, no_sw_world.p_interface, color=lw_color, linestyle='dotted')
         ax[2].legend()
 
-    def plot_animate(self, T_array, t_array, T_eqb=None, correct_solution=True, tau_lw_array=None, tau_sw_array=None,
+    def plot_animate(self, T_array, t_array, T_eqb=None, correct_solution=True, tau_array=None, flux_array=None,
                      log_axis=True, nPlotFrames=100, fract_frames_at_start=0.25, start_step=3):
         """
         This plots an animation showing the evolution of the temperature profile and optical depth profile with time.
@@ -504,12 +504,18 @@ class GreyGas:
             default: None.
         :param correct_solution: boolean, optional.
             If T_eqb given, this indicates whether the analytic solution was correct. Affects label.
-        :param tau_lw_array: list of numpy arrays, optional.
+        :param tau_array: dictionary, optional.
+            tau_array['lw'][i] is long wave optical depth profile at time t_array[i].
+            tau_array['sw'][i] is short wave optical depth profile at time t_array[i].
             If given, will add second subplot showing evolution of long wave optical depth.
             Only really makes sense to plot if optical depth was changing with time.
             default: None.
-        :param tau_sw_array: list of numpy arrays, optional.
-            Same as tau_lw_array but for short wave.
+        :param flux_array: dictionary, optional.
+            flux_array['lw_up'][i] is long wave upward flux at time t_array[i].
+            flux_array['lw_down'][i] is long wave downward flux at time t_array[i].
+            flux_array['sw_up'][i] is short wave upward flux at time t_array[i].
+            flux_array['sw_down'][i] is short wave downward flux at time t_array[i].
+            If given will add subplot showing evolution of flux with time.
             default: None.
         :param log_axis: boolean, optional.
             Whether to have pressure on the y-axis as a log-scale.
@@ -527,6 +533,7 @@ class GreyGas:
             default: 3
         """
         '''Get subsection of data for plotting'''
+        F_norm = self.F_stellar_constant / 4 # normalisation for flux plots
         if len(T_array) > nPlotFrames:
             start_end_ind = start_step * int(fract_frames_at_start * nPlotFrames)
             use_plot_start = np.arange(0, start_end_ind, start_step)
@@ -546,24 +553,42 @@ class GreyGas:
             use_plot = np.unique(np.concatenate((use_plot_start, use_plot_end)))
             T_plot = np.array(T_array)[use_plot]
             t_plot = np.array(t_array)[use_plot]
-            if tau_lw_array is not None:
-                tau_lw_plot = np.array(tau_lw_array)[use_plot]
-                tau_sw_plot = np.array(tau_sw_array)[use_plot]
+            if tau_array is not None:
+                tau_lw_plot = np.array(tau_array['lw'])[use_plot]
+                tau_sw_plot = np.array(tau_array['sw'])[use_plot]
+            if flux_array is not None:
+                lw_up_flux_plot = np.array(flux_array['lw_up'])[use_plot] / F_norm
+                lw_down_flux_plot = np.array(flux_array['lw_down'])[use_plot] / F_norm
+                sw_up_flux_plot = np.array(flux_array['sw_up'])[use_plot] / F_norm
+                sw_down_flux_plot = np.array(flux_array['sw_down'])[use_plot] / F_norm
         else:
             T_plot = np.array(T_array)
             t_plot = np.array(t_array)
-            if tau_lw_array is not None:
-                tau_lw_plot = np.array(tau_lw_array)
-                tau_sw_plot = np.array(tau_sw_array)
+            if tau_array is not None:
+                tau_lw_plot = np.array(tau_array['lw'])
+                tau_sw_plot = np.array(tau_array['sw'])
+            if flux_array is not None:
+                lw_up_flux_plot = np.array(flux_array['lw_up']) / F_norm
+                lw_down_flux_plot = np.array(flux_array['lw_down']) / F_norm
+                sw_up_flux_plot = np.array(flux_array['sw_up']) / F_norm
+                sw_down_flux_plot = np.array(flux_array['sw_down']) / F_norm
+        if flux_array is not None:
+            net_flux_plot = lw_up_flux_plot + sw_up_flux_plot - lw_down_flux_plot - sw_down_flux_plot
 
         '''Set up basic plot info'''
-        if tau_lw_array is not None:
-            fig, axs = plt.subplots(1, 2, sharey=True)
+        nPlots = 1 + int(tau_array is not None) + int(flux_array is not None)
+        if nPlots > 1:
+            fig, axs = plt.subplots(1, nPlots, sharey=True)
             ax = axs[0]
-            tau_min = min([min(tau_lw_plot[i]) for i in range(len(tau_lw_plot))]) - 1
-            tau_max = max([max(tau_lw_plot[i]) for i in range(len(tau_lw_plot))]) + 1
         else:
             fig, ax = plt.subplots(1, 1)
+
+        if tau_array is not None:
+            tau_min = min(min(i for v in tau_array[key] for i in v) for key in [*tau_array]) - 1
+            tau_max = max(max(i for v in tau_array[key] for i in v) for key in [*tau_array]) + 1
+        if flux_array is not None:
+            flux_min = -max(max(i for v in flux_array[key] for i in v) for key in ['lw_down', 'sw_down']) / F_norm - 0.1
+            flux_max = max(max(i for v in flux_array[key] for i in v) for key in ['lw_up', 'sw_up']) / F_norm + 0.1
 
         T_min = min([min(T_plot[i]) for i in range(len(T_plot))])[0] - 10
         T_max = max([max(T_plot[i]) for i in range(len(T_plot))])[0] + 10
@@ -571,10 +596,13 @@ class GreyGas:
             T_min = min([min(T_eqb)[0] - 10, T_min])
             T_max = max([max(T_eqb)[0] + 10, T_max])
 
+        lw_color = '#ff7f0e'
+        sw_color = '#1f77b4'
         def animate(i, grey_world):
             '''What to do at each frame of animation'''
             ax.clear()
-            ax.plot(np.ones((grey_world.nz - 1, grey_world.ny)) * grey_world.T0, grey_world.p, label='Isothermal')
+            ax.plot(np.ones((grey_world.nz - 1, grey_world.ny)) * grey_world.T0, grey_world.p,
+                    label='Isothermal', color=sw_color)
             if T_eqb is not None:
                 if correct_solution and not grey_world.sw_tau_is_zero:
                     Teqb_label = r'Radiative Equilibrium, $\tau_{sw}\neq0$'
@@ -585,8 +613,10 @@ class GreyGas:
                 else:
                     Teqb_label = r'Radiative Equilibrium, $\tau_{sw}=0$ (Wrong)'
                     Tcurrent_label = r'Current, $\tau_{sw}\neq0$'
-                ax.plot(T_eqb, grey_world.p, label=Teqb_label)
+                ax.plot(T_eqb, grey_world.p, label=Teqb_label, color=lw_color)
             else:
+                Tcurrent_label = 'Current'
+            if tau_array is not None:
                 Tcurrent_label = 'Current'
             ax.plot(T_plot[i], grey_world.p, label=Tcurrent_label, color='#d62728')
             if log_axis:
@@ -596,15 +626,37 @@ class GreyGas:
             ax.set_ylabel('Pressure / Pa')
             ax.set_xlim((T_min, T_max))
             ax.legend()
-            if tau_lw_array is not None:
+            if tau_array is not None:
                 axs[1].clear()
-                axs[1].plot(tau_lw_plot[i], grey_world.p, label='long wave', color='#ff7f0e')
-                axs[1].plot(tau_sw_plot[i], grey_world.p, label='short wave', color='#1f77b4')
+                axs[1].plot(tau_sw_plot[i], grey_world.p, label='short wave', color=sw_color)
+                axs[1].plot(tau_lw_plot[i], grey_world.p, label='long wave', color=lw_color)
                 axs[1].set_xlabel(r'$\tau$')
                 axs[1].set_xlim((tau_min, tau_max))
                 if log_axis:
                     axs[1].set_yscale('log')
                 axs[1].legend()
+            if flux_array is not None:
+                axs[-1].clear()
+                axs[-1].plot(sw_up_flux_plot[0], grey_world.p_interface,  color=sw_color,
+                             linestyle='dotted', label=r'$F_{sw}(t=0)$')
+                axs[-1].plot(-sw_down_flux_plot[0], grey_world.p_interface,  color=sw_color,
+                             linestyle='dotted')
+                axs[-1].plot(lw_up_flux_plot[0], grey_world.p_interface,  color=lw_color,
+                             linestyle='dotted', label=r'$F_{lw}(t=0)$')
+                axs[-1].plot(-lw_down_flux_plot[0], grey_world.p_interface,  color=lw_color,
+                             linestyle='dotted')
+                axs[-1].plot(sw_up_flux_plot[i], grey_world.p_interface,  color=sw_color,
+                             label=r'$F_{sw}$')
+                axs[-1].plot(-sw_down_flux_plot[i], grey_world.p_interface,  color=sw_color)
+                axs[-1].plot(lw_up_flux_plot[i], grey_world.p_interface,  color=lw_color,
+                             label=r'$F_{lw}$')
+                axs[-1].plot(-lw_down_flux_plot[i], grey_world.p_interface,  color=lw_color)
+                axs[-1].plot(net_flux_plot[i], self.p_interface, label=r'$F_{net}$', color='#d62728')
+                axs[-1].set_xlabel(r'Radiation Flux, $F$, as fraction of Incoming Solar, $\frac{F^\odot}{4}$')
+                axs[-1].set_xlim((flux_min, flux_max))
+                if log_axis:
+                    axs[-1].set_yscale('log')
+                axs[-1].legend()
             t_full_days = t_plot[i] / (24 * 60 ** 2)
             t_years, t_days = divmod(t_full_days, 365)
             Title = "{:.0f}".format(t_years) + " Years and " + "{:.1f}".format(t_days) + " Days"
@@ -612,6 +664,10 @@ class GreyGas:
 
         anim = FuncAnimation(fig, animate,
                              frames=np.size(t_plot), interval=100, blit=False, repeat_delay=2000, fargs=(self,))
+        plot_backend = plt.get_backend()
+        if plot_backend == 'TkAgg' and nPlots == 3:
+            mng = plt.get_current_fig_manager()
+            mng.resize(*mng.window.maxsize())
         return anim
 
 
