@@ -173,8 +173,8 @@ class GreyGas:
         delta_log_p = abs(np.ediff1d(log_p))
         tau_interface = self.tau_lw_func(np.tile(p_interface, (self.ny, 1)).transpose(), *self.tau_lw_func_args)[1]
         delta_tau = abs(np.ediff1d(tau_interface))
-        to_correct = np.where(delta_log_p > log_p_min_sep)[0] + 1
-        to_correct = to_correct[np.where(delta_tau[to_correct - 1] > tau_min_sep)]  # need significant concentration
+        to_correct = np.where(delta_log_p > log_p_min_sep)[0]
+        to_correct = to_correct[np.where(delta_tau[to_correct] > tau_min_sep)]  # need significant concentration
         target_log_delta_p = log_p_min_sep / 2
         for i in to_correct:
             if nz_multiplier is not None:
@@ -400,15 +400,16 @@ class GreyGas:
         if self.sw_tau_is_zero:
             correct_solution = True
         elif self.tau_lw_func.__name__ == 'exponential' and self.tau_sw_func.__name__ == 'exponential':
-            power_ratio = self.tau_lw_func_args[0] / self.tau_sw_func_args[0]
+            alpha_lw = OpticalDepthFunctions.get_exponential_alpha(self.tau_lw_func_args[0])
+            alpha_sw = OpticalDepthFunctions.get_exponential_alpha(self.tau_sw_func_args[0])
+            power_ratio = alpha_lw / alpha_sw
             if abs(round(power_ratio) - power_ratio) < 1e-5 and power_ratio < 10:
                 correct_solution = True
             else:
                 warnings.warn("\nCan only compute exact solution if the ratio of long wave alpha parameter, " +
-                              str.format('{0:1.1e}', self.tau_lw_func_args[0]) + ", to short wave alpha parameter, " +
-                              str.format('{0:1.1e}', self.tau_sw_func_args[0]) + ", is an integer and "
-                                                                                 "<10.\nCurrently ratio is " + str(
-                    power_ratio) +
+                              str.format('{0:1.1e}', alpha_lw) + ", to short wave alpha parameter, " +
+                              str.format('{0:1.1e}', alpha_sw) + ", is an integer and <10."
+                              "\nCurrently ratio is " + str(power_ratio) +
                               "\nReturned equilibrium solution is that with short wave optical depth = 0 everywhere.")
                 correct_solution = False
         else:
@@ -621,21 +622,32 @@ class OpticalDepthFunctions:
     3 - sympy_function as function of pressure
     4 - sympy_function inputs excluding pressure"""
 
-    # To get scale height and exponential alpha same order of magnitude
-    alpha_multiplier_for_exponential = 1e-5
-
     @staticmethod
-    def scale_height(p, alpha=4, tau_surface=4, k=1):
+    def get_scale_height_alpha(p_width):
+        """
+
+        :param p_width: difference between pressure value at surface and where
+            mass concentration falls, q, falls to 1/e of q(p_max)
+        :return:
+        alpha: the larger alpha, the more peaked q and tau are about p_surface.
+        """
+        p_fall_value = p_surface - p_width
+        if p_fall_value > p_surface:
+            raise ValueError('p_fall_value is above p_max')
+        return -1 / np.log(p_fall_value/p_surface)
+
+    @classmethod
+    def scale_height(cls, p, p_width=0.22*p_surface, tau_surface=4, k=1):
         """
         method used in textbook, Atmospheric Circulation Dynamics and General Circulation Models.
         scale height of absorbing constituent is H/alpha, where H is scale height of pressure
 
         :param p: numpy array.
             pressure levels to find optical depth.
-        :param alpha: float, optional.
-            Determines the slope of optical depth, larger value means optical depth increases more
-            rapidly near surface.
-            default: 4
+        :param p_width: float, optional.
+            Difference between pressure at surface
+            and where mass concentration, q, falls to 1/e of q(p_surface)
+            default: 0.22*p_surface
         :param tau_surface: float, optional.
             The value of optical depth at the surface.
             default: 4
@@ -643,6 +655,7 @@ class OpticalDepthFunctions:
             Absorption coefficient for gas.
             default: 1
         """
+        alpha = cls.get_scale_height_alpha(p_width)
 
         def tau_func_sympy(p, tau_surface, alpha):
             return tau_surface * (p / p_surface) ** (alpha + 1)
@@ -652,18 +665,51 @@ class OpticalDepthFunctions:
         q = g / k * tau_diff_func(p, tau_surface, alpha)  # constituent density distribution
         return q, tau, tau_func_sympy, [tau_surface, alpha]
 
+    @staticmethod
+    def get_exponential_p_width(alpha, p_max=p_surface):
+        """
+        This finds the p_width for the exponential optical depth if you know alpha.
+        Useful for finding an analytic solution as this requires alpha_lw/alpha_sw to be an integer
+        and small. Hence you know alpha and want to find p_fall_value.
+        :param alpha: float.
+            the larger alpha, the more peaked tau is about p_max.
+        :param p_max: float, optional.
+            Will differ from p_surface for peak_in_atmopsphere.
+            default: p_surface
+        :return:
+        p_width: Difference between p_max and pressure
+            where mass concentration, q, falls to 1/e of q(p_surface)
+        """
+        return 1 / alpha
+
+    @staticmethod
+    def get_exponential_alpha(p_width, p_max=p_surface):
+        """
+
+        :param p_fall_value: Difference between pressure at surface
+            and where mass concentration, q, falls to 1/e of q(p_surface)
+        :param p_max: pressure level where mass concentration, q is peaked.
+            default: p_surface
+        :return:
+        alpha: the larger alpha, the more peaked q is about p_max.
+        """
+        p_fall_value = p_max - p_width
+        if p_fall_value > p_max:
+            raise ValueError('p_fall_value is larger than p_max')
+        return 1 / (p_max - p_fall_value)
+
     @classmethod
-    def exponential(cls, p, alpha=1, tau_surface=4, k=1):
+    def exponential(cls, p, p_width=0.22 * p_surface, tau_surface=4, k=1):
         """
         Optical depth falls off exponentially as pressure decreases.
         Can use this method to get an analytic solution with a short wave contribution.
 
         :param p: numpy array.
             pressure levels to find optical depth.
-        :param alpha: float, optional.
-            Determines the slope of optical depth, larger value means optical depth increases more
-            rapidly near surface.
-            default: 1
+        :param p_width: float, optional.
+            Difference between pressure at surface
+            and where mass concentration, q, falls to 1/e of q(p_surface)
+            default: 0.22*p_surface
         :param tau_surface: float, optional.
             The value of optical depth at the surface.
             default: 4
@@ -671,7 +717,7 @@ class OpticalDepthFunctions:
             Absorption coefficient for gas.
             default: 1
         """
-        alpha = alpha * cls.alpha_multiplier_for_exponential
+        alpha = cls.get_exponential_alpha(p_width)
         coef = tau_surface / (np.exp(alpha * p_surface) - 1)
 
         def tau_func_sympy(p, coef, alpha):
@@ -685,17 +731,17 @@ class OpticalDepthFunctions:
         return q, tau, tau_func_sympy, [coef, alpha]
 
     @classmethod
-    def peak_in_atmosphere(cls, p, alpha=1, p_max=50000, tau_surface=4, k=1):
+    def peak_in_atmosphere(cls, p, p_width=10000, p_max=50000, tau_surface=4, k=1):
         """
         Mass concentration, q, is peaked at p_max and falls off away from this as exp(-alpha|p-p_max|)
         either side.
 
         :param p: numpy array.
             pressure levels to find optical depth.
-        :param alpha: float, optional.
-            Determines the slope of optical depth, larger value means optical depth increases more
-            rapidly near p_max.
-            default: 1
+        :param p_width: float, optional.
+            Difference between p_max and pressure
+            where mass concentration, q, falls to 1/e of q(p_max)
+            default: 10000
         :param p_max: float, optional.
             pressure level where mass concentration is peaked.
             default: 50000
@@ -706,7 +752,7 @@ class OpticalDepthFunctions:
             Absorption coefficient for gas.
             default: 1
         """
-        alpha = alpha * cls.alpha_multiplier_for_exponential
+        alpha = cls.get_exponential_alpha(p_width, p_max)
         coef = tau_surface / (2 - np.exp(-alpha * p_max) - np.exp(alpha * (p_max - p_surface)))
 
         class tau_func_sympy(Function):
@@ -750,24 +796,24 @@ class OpticalDepthFunctions:
         return q, tau, tau_func_sympy, [coef, alpha, p_max]
 
     @classmethod
-    def scale_height_and_peak_in_atmosphere(cls, p, alpha1=4, tau_surface1=4,
-                                            alpha2=1, p_max2=50000, tau_surface2=4, k=1):
+    def scale_height_and_peak_in_atmosphere(cls, p, p_width1=0.7788 * p_surface, tau_surface1=4,
+                                            p_width2=10000, p_max2=50000, tau_surface2=4, k=1):
         """
         Combination of scale_height and peak_in_atmosphere functions.
 
         :param p: numpy array.
             pressure levels to find optical depth.
-        :param alpha1: float, optional, scale_height arg.
-            Determines the slope of optical depth, larger value means optical depth increases more
-            rapidly near p_surface.
-            default: 4
+        :param p_width1: float, optional.
+            Difference between pressure at surface
+            and where mass concentration, q1, falls to 1/e of q1(p_surface)
+            default: 0.22*p_surface
         :param tau_surface1: float, optional, scale_height arg.
             The value of optical depth at the surface due to scale_height.
             default: 4
-        :param alpha2: float, optional, peak_in_atmosphere arg.
-            Determines the slope of optical depth, larger value means optical depth increases more
-            rapidly near p_max2.
-            default: 1
+        :param p_width2: float, optional.
+            Difference between p_max2 and pressure
+            where mass concentration, q2, falls to 1/e of q2(p_max2)
+            default: 10000
         :param p_max2: float, optional, peak_in_atmosphere arg.
             pressure level where mass concentration is peaked.
             default: 50000
@@ -778,7 +824,8 @@ class OpticalDepthFunctions:
             Absorption coefficient for gas.
             default: 1
         """
-        alpha2 = alpha2 * cls.alpha_multiplier_for_exponential
+        alpha1 = cls.get_scale_height_alpha(p_width1)
+        alpha2 = cls.get_exponential_alpha(p_width2, p_max2)
         coef2 = tau_surface2 / (2 - np.exp(-alpha2 * p_max2) - np.exp(alpha2 * (p_max2 - p_surface)))
 
         class tau_func_sympy(Function):
