@@ -31,36 +31,19 @@ grey_world = Model.radiation.grey.GreyGas(nz='auto', tau_lw_func=OpticalDepthFun
 #                                           tau_sw_func_args=[p_surface, 0.12, 100, 20, 0.002])
 
 """ Approach to equilibrium"""
-up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, \
-    correct_solution = grey_world.equilibrium_sol()
-if correct_solution:
-    grey_world.plot_eqb(up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb)
-#plt.show()
-t = 0
-# Get temperature results until net_flux is zero everywhere i.e. equilibrium
-net_flux_thresh = 1e-1
-func_net_flux_thresh = 1e-7
-t_array = [0]
-T_array = [grey_world.T.copy()]
-n_no_flux_change = 0
-no_flux_change_thresh = 100
-equilibrium = False
-#while (max(abs(grey_world.net_flux)) > net_flux_thresh or t == 0) and n_no_flux_change < no_flux_change_thresh:
-while not equilibrium:
-    if t > 365*24*60**2:
-        func_net_flux_thresh = 0.1
-    t, delta_net_flux = grey_world.update_temp(t)
-    n_no_flux_change = n_no_flux_change + int(delta_net_flux < net_flux_thresh)
-    t_array.append(t)
-    T_array.append(grey_world.T.copy())
-    equilibrium = grey_world.check_equilibrium(delta_net_flux, net_flux_thresh)
-    if min(grey_world.T)[0] < 0:
-        raise ValueError('Temperature is below zero')
-
-anim = grey_world.plot_animate(T_array, t_array, T_eqb, correct_solution)
-plt.show()
-
-
+# up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, \
+#     correct_solution = grey_world.equilibrium_sol()
+# if correct_solution:
+#     grey_world.plot_eqb(up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb)
+# #plt.show()
+# t = 0
+# # Get temperature results until net_flux is zero everywhere i.e. equilibrium
+# net_flux_thresh = 1e-1
+# data = grey_world.evolve_to_equilibrium(flux_thresh=net_flux_thresh)
+# anim = grey_world.plot_animate(data['T'], data['t'], T_eqb, correct_solution)
+# plt.show()
+#
+#
 """ Evolution with tau"""
 p1 = OpticalDepthFunctions.get_exponential_p_width(1e-5)
 p2 = OpticalDepthFunctions.get_exponential_p_width(1e-5 / 3, 2000)
@@ -87,45 +70,34 @@ T_array = [T_eqb.copy()]
 tau_array = {'lw': [grey_world.tau.copy()], 'sw': [grey_world.tau_sw.copy()]}
 flux_array = {'lw_up': [up_flux_eqb.copy()], 'lw_down': [down_flux_eqb.copy()],
               'sw_up': [up_sw_flux_eqb.copy()], 'sw_down': [down_sw_flux_eqb.copy()]}
-# tau_array = [grey_world.tau.copy()]
-# tau_sw_array = [grey_world.tau_sw.copy()]
+data = {'t': t_array, 'T': T_array, 'tau': tau_array, 'flux': flux_array}
 changing_tau = True
-delta_net_flux_thresh = 1e-4
+delta_net_flux_thresh = 1e-3
+
 while t < t_end:
     tau_params[1] = min(tau_params[1] + 1e-8 * t, tau_params_final[1])
     grey_world.tau_lw_func_args = tuple(tau_params)
-    if tau_params[1] == tau_params_final[1]:
+    if tau_params[1] == tau_params_final[1] and tau_sw_params[2] != tau_sw_params_final[2]:
         if t_sw == t_end:
-            changing_tau = False
-            if delta_net_flux < delta_net_flux_thresh:
-                changing_tau = True
-        if changing_tau:
-            grey_world.time_step_info['RemoveInd'] = []
-            t_sw = min(t, t_sw)
-            tau_sw_params[2] = min(tau_sw_params[2] + 1e-2 * (t - t_sw) / grey_world.time_step_info['dt'],
-                                   tau_sw_params_final[2])
-            grey_world.tau_sw_func_args = tuple(tau_sw_params)
+            # once lw optical depth reached max value, get to equilibrium
+            data = grey_world.evolve_to_equilibrium(data, delta_net_flux_thresh, T_eqb.copy())
+            t = data['t'][-1]
+            t_sw = t
+        # After equilibrium evolve sw optical depth
+        tau_sw_params[2] = min(tau_sw_params[2] + 1e-2 * (t - t_sw) / grey_world.time_step_info['dt'],
+                               tau_sw_params_final[2])
+        grey_world.tau_sw_func_args = tuple(tau_sw_params)
     if tau_sw_params[2] == tau_sw_params_final[2]:
-        changing_tau = False
-        if delta_net_flux < delta_net_flux_thresh:
-            changing_tau = True
-            grey_world.time_step_info['RemoveInd'] = []
-            tau_sw_params[2] = 0
-            grey_world.tau_sw_func_args = tuple(tau_sw_params)
-            t_turn_off = t
-    t, delta_net_flux = grey_world.update_temp(t, T_eqb.copy(), changing_tau)
-    if t_turn_off < t_end:
-        changing_tau = False
-    t_array.append(t)
-    T_array.append(grey_world.T.copy())
-    tau_array['lw'].append(grey_world.tau.copy())
-    tau_array['sw'].append(grey_world.tau_sw.copy())
-    flux_array['lw_up'].append(grey_world.up_lw_flux.copy())
-    flux_array['lw_down'].append(grey_world.down_lw_flux.copy())
-    flux_array['sw_up'].append(grey_world.up_sw_flux.copy())
-    flux_array['sw_down'].append(grey_world.down_sw_flux.copy())
-    if min(grey_world.T)[0] < 0:
-        raise ValueError('Temperature is below zero')
-
-anim = grey_world.plot_animate(T_array, t_array, T_eqb, correct_solution, tau_array, flux_array)
+        # once sw optical depth reached max value, get to equilibrium
+        data = grey_world.evolve_to_equilibrium(data, delta_net_flux_thresh, T_eqb.copy())
+        # set sw optical depth to zero and then see how it evolves from there
+        tau_sw_params[2] = 0
+        grey_world.tau_sw_func_args = tuple(tau_sw_params)
+        grey_world.update_grid()
+        data = grey_world.evolve_to_equilibrium(data, delta_net_flux_thresh, T_eqb.copy())
+        t = t_end + 10 # once reached final equilibrium, end simulation
+    else:
+        t = grey_world.update_temp(t, T_eqb.copy(), changing_tau)[0]
+        data = grey_world.save_data(data, t)
+anim = grey_world.plot_animate(data['T'], data['t'], T_eqb, correct_solution, data['tau'], data['flux'])
 plt.show()

@@ -397,6 +397,66 @@ class GreyGas:
             equilibrium = False
         return equilibrium
 
+    def save_data(self, data_dict, t):
+        """
+        This appends the time and current Temperature to the data_dict. It will also add optical depth and
+        flux data if they are already in data_dict.
+
+        :param data_dict: dictionary.
+            Must contain 't' and 'T' keys. Can also contain 'tau' and 'flux' keys.
+            The info in this dictionary is used to pass to plot_animate.
+        :param t: float.
+            Current time.
+        :return:
+            data_dict
+        """
+        data_dict['t'].append(t)
+        data_dict['T'].append(self.T.copy())
+        if "tau" in data_dict:
+            data_dict['tau']['lw'].append(self.tau.copy())
+            data_dict['tau']['sw'].append(self.tau_sw.copy())
+        if "flux" in data_dict:
+            data_dict['flux']['lw_up'].append(self.up_lw_flux.copy())
+            data_dict['flux']['lw_down'].append(self.down_lw_flux.copy())
+            data_dict['flux']['sw_up'].append(self.up_sw_flux.copy())
+            data_dict['flux']['sw_down'].append(self.down_sw_flux.copy())
+        return data_dict
+
+    def evolve_to_equilibrium(self, data_dict=None, flux_thresh=1e-3, T_initial=None):
+        """
+        This
+
+        :param data_dict: dictionary, optional.
+            Must contain 't' and 'T' keys. Can also contain 'tau' and 'flux' keys.
+            The info in this dictionary is used to pass to plot_animate.
+            Must contain at least one value in each array.
+            If not provided, will set first value to be t=0 and T = T_initial or self.T
+            default: None
+        :param flux_thresh: float, optional.
+            Threshold in delta_net_flux to achieve equilibrium
+            default: 1e-3
+        :param T_initial: numpy array, optional.
+            Temperature profile at t=0. If not provided, will use self.T
+            default: None
+        :return:
+            data_dict
+        """
+        if data_dict is None:
+            if T_initial is None:
+                T_initial = self.T.copy()
+            data_dict = {'t': [0], 'T': [T_initial]}
+        t = data_dict['t'][-1]
+        equilibrium = False
+        while not equilibrium:
+            t, delta_net_flux = self.update_temp(t, T_initial, changing_tau=False)
+            data_dict = self.save_data(data_dict, t)
+            equilibrium = self.check_equilibrium(delta_net_flux, flux_thresh)
+            if min(self.T)[0] < 0:
+                raise ValueError('Temperature is below zero')
+        # set RemoveInd empty so will evolve all pressure levels if continue after this
+        self.time_step_info['RemoveInd'] = []
+        return data_dict
+
     def equilibrium_sol(self):
         """
         Calculates the analytic equilibrium solution given the current optical depth grids.
@@ -688,7 +748,7 @@ class GreyGas:
             t_full_days = t_plot[i] / (24 * 60 ** 2)
             t_years, t_days = divmod(t_full_days, 365)
             Title = "{:.0f}".format(t_years) + " Years and " + "{:.1f}".format(t_days) + " Days"
-            plt.text(0.5, 1.01, Title, horizontalalignment='center', verticalalignment='bottom', transform=ax.transAxes)
+            ax.text(0.5, 1.01, Title, horizontalalignment='center', verticalalignment='bottom', transform=ax.transAxes)
 
         anim = FuncAnimation(fig, animate,
                              frames=np.size(t_plot), interval=100, blit=False, repeat_delay=2000, fargs=(self,))
