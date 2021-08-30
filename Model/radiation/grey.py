@@ -452,7 +452,7 @@ class GreyGas:
         :param up_sw_flux_eqb: equilibrium upward short wave flux
         :param down_sw_flux_eqb: equilibrium downward short wave flux
         """
-        fig, ax = plt.subplots(1, 3, sharey=True)
+        fig, ax = plt.subplots(1, 3, sharey=True, figsize=(12, 5))
         sw_color = '#1f77b4'
         lw_color = '#ff7f0e'
         if not self.sw_tau_is_zero:
@@ -686,7 +686,7 @@ class OpticalDepthFunctions:
     1 - mass concentration distribution, q
     2 - optical depth, tau
     3 - sympy_function as function of pressure
-    4 - sympy_function inputs excluding pressure"""
+    4 - sympy_function arguments excluding pressure"""
 
     @staticmethod
     def get_scale_height_alpha(p_width):
@@ -752,7 +752,7 @@ class OpticalDepthFunctions:
     def get_exponential_alpha(p_width, p_max=p_surface):
         """
 
-        :param p_fall_value: Difference between pressure at surface
+        :param p_width: Difference between pressure at surface
             and where mass concentration, q, falls to 1/e of q(p_surface)
         :param p_max: pressure level where mass concentration, q is peaked.
             default: p_surface
@@ -857,8 +857,6 @@ class OpticalDepthFunctions:
 
         tau = tau_func(p, coef, alpha, p_max)
         q = g / k * tau_diff_func(p, coef, alpha, p_max)  # constituent density distribution
-        # q = coef * g / k * np.power(p, alpha) * (p_surface - p)  # constituent density distribution
-        # tau = coef * (p_surface * np.power(p, alpha + 1) / (alpha + 1) - np.power(p, alpha + 2) / (alpha + 2))
         return q, tau, tau_func_sympy, [coef, alpha, p_max]
 
     @classmethod
