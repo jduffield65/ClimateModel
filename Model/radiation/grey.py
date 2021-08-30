@@ -291,7 +291,7 @@ class GreyGas:
         else:
             # always update every level.
             levels_to_update = np.arange(self.nz - 1)
-            delta_net_flux = 1e6
+            delta_net_flux = 1e6 # any large number
         if changing_tau is False:
             delta_net_flux = np.percentile(abs(net_flux - self.net_flux), net_flux_percentile)
         if len(levels_to_update) > 0:
@@ -378,6 +378,24 @@ class GreyGas:
         if (not self.sw_tau_is_zero) or (not old_sw_tau_is_zero):
             self.tau_sw_interface = self.tau_sw_func(self.p_interface, *self.tau_sw_func_args)[1]
             self.q_sw, self.tau_sw, _, _ = self.tau_sw_func(self.p, *self.tau_sw_func_args)
+
+    def check_equilibrium(self, delta_net_flux, flux_thresh=1e-3):
+        """
+        This checks if either net flux has reached zero or it is not changing anymore. In which case
+        it will return True indicating equilibrium has been achieved.
+
+        :param delta_net_flux: float.
+            change in flux between time steps
+        :param flux_thresh: float, optional.
+            Threshold to achieve equilibrium
+            default: 1e-3
+        :return:
+        """
+        if max(abs(self.net_flux)) < flux_thresh or delta_net_flux < flux_thresh:
+            equilibrium = True
+        else:
+            equilibrium = False
+        return equilibrium
 
     def equilibrium_sol(self):
         """

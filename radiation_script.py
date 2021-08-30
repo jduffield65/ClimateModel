@@ -10,13 +10,13 @@ from Model.constants import p_surface
 matplotlib.use('TkAgg')  # To make plot pop out
 
 '''Analytic solution with short wave'''
-# p_width_lw = 100000
-# # alpha ratio must be integer for analytic solution
-# alpha_sw = OpticalDepthFunctions.get_exponential_alpha(p_width_lw) / 5
-# p_width_sw = OpticalDepthFunctions.get_exponential_p_width(alpha_sw)
-# grey_world = Model.radiation.grey.GreyGas(nz='auto', tau_lw_func=OpticalDepthFunctions.exponential,
-#                                           tau_lw_func_args=[p_width_lw, 4], tau_sw_func=OpticalDepthFunctions.exponential,
-#                                           tau_sw_func_args=[p_width_sw, 0.6])
+p_width_lw = 100000
+# alpha ratio must be integer for analytic solution
+alpha_sw = OpticalDepthFunctions.get_exponential_alpha(p_width_lw) / 5
+p_width_sw = OpticalDepthFunctions.get_exponential_p_width(alpha_sw)
+grey_world = Model.radiation.grey.GreyGas(nz='auto', tau_lw_func=OpticalDepthFunctions.exponential,
+                                          tau_lw_func_args=[p_width_lw, 4], tau_sw_func=OpticalDepthFunctions.exponential,
+                                          tau_sw_func_args=[p_width_sw, 0.6])
 '''With stratosphere'''
 # grey_world = Model.radiation.grey.GreyGas(nz='auto', tau_lw_func=OpticalDepthFunctions.exponential,
 #                                           tau_lw_func_args=[100000, 4], tau_sw_func=OpticalDepthFunctions.peak_in_atmosphere,
@@ -31,31 +31,34 @@ matplotlib.use('TkAgg')  # To make plot pop out
 #                                           tau_sw_func_args=[p_surface, 0.12, 100, 20, 0.002])
 
 """ Approach to equilibrium"""
-# up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, \
-#     correct_solution = grey_world.equilibrium_sol()
-# if correct_solution:
-#     grey_world.plot_eqb(up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb)
-# #plt.show()
-# t = 0
-# # Get temperature results until net_flux is zero everywhere i.e. equilibrium
-# net_flux_thresh = 1e-1
-# func_net_flux_thresh = 1e-7
-# t_array = [0]
-# T_array = [grey_world.T.copy()]
-# n_no_flux_change = 0
-# no_flux_change_thresh = 100
-# while (max(abs(grey_world.net_flux)) > net_flux_thresh or t == 0) and n_no_flux_change < no_flux_change_thresh:
-#     if t > 365*24*60**2:
-#         func_net_flux_thresh = 0.1
-#     t, delta_net_flux = grey_world.update_temp(t)
-#     n_no_flux_change = n_no_flux_change + int(delta_net_flux < net_flux_thresh)
-#     t_array.append(t)
-#     T_array.append(grey_world.T.copy())
-#     if min(grey_world.T)[0] < 0:
-#         raise ValueError('Temperature is below zero')
-#
-# anim = grey_world.plot_animate(T_array, t_array, T_eqb, correct_solution)
-# plt.show()
+up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, \
+    correct_solution = grey_world.equilibrium_sol()
+if correct_solution:
+    grey_world.plot_eqb(up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb)
+#plt.show()
+t = 0
+# Get temperature results until net_flux is zero everywhere i.e. equilibrium
+net_flux_thresh = 1e-1
+func_net_flux_thresh = 1e-7
+t_array = [0]
+T_array = [grey_world.T.copy()]
+n_no_flux_change = 0
+no_flux_change_thresh = 100
+equilibrium = False
+#while (max(abs(grey_world.net_flux)) > net_flux_thresh or t == 0) and n_no_flux_change < no_flux_change_thresh:
+while not equilibrium:
+    if t > 365*24*60**2:
+        func_net_flux_thresh = 0.1
+    t, delta_net_flux = grey_world.update_temp(t)
+    n_no_flux_change = n_no_flux_change + int(delta_net_flux < net_flux_thresh)
+    t_array.append(t)
+    T_array.append(grey_world.T.copy())
+    equilibrium = grey_world.check_equilibrium(delta_net_flux, net_flux_thresh)
+    if min(grey_world.T)[0] < 0:
+        raise ValueError('Temperature is below zero')
+
+anim = grey_world.plot_animate(T_array, t_array, T_eqb, correct_solution)
+plt.show()
 
 
 """ Evolution with tau"""
