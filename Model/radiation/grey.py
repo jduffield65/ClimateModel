@@ -570,7 +570,7 @@ class GreyGas:
         ax[2].legend()
 
     def plot_animate(self, T_array, t_array, T_eqb=None, correct_solution=True, tau_array=None, flux_array=None,
-                     log_axis=True, nPlotFrames=100, fract_frames_at_start=0.25, start_step=3):
+                     log_axis=True, nPlotFrames=100, fract_frames_at_start=0.25, start_step=3, show_last_frame = False):
         """
         This plots an animation showing the evolution of the temperature profile and optical depth profile with time.
         :param T_array: list of numpy arrays.
@@ -605,10 +605,13 @@ class GreyGas:
             fract_frames_at_start*nPlotFrames of the animation frames will be at the start.
             The remainder will be equally spaced amongst the remaining times.
             default: 0.25
-        :param start_step:
+        :param start_step: integer, optional.
             The step size of the first fract_frames_at_start*nPlotFrames frames.
             A value of 2 would mean every other time in the first fract_frames_at_start*nPlotFrames*2 frames.
             default: 3
+        :param show_last_frame:  boolean, optional.
+            If True, will plot the last frame collected. Otherwise will only plot till temperature stops changing.
+            default: False
         """
         '''Get subsection of data for plotting'''
         F_norm = self.F_stellar_constant / 4 # normalisation for flux plots
@@ -626,6 +629,8 @@ class GreyGas:
                     max_index = index_where_temp_diff_small[0] + 1
             else:
                 max_index = index_where_temp_diff_small[max(index_sep) + 1] + 1
+            if show_last_frame:
+                max_index = len(T_array) - 1
             use_plot_end = np.linspace(start_end_ind, max_index,
                                        int((1 - fract_frames_at_start) * nPlotFrames), dtype=int)
             use_plot = np.unique(np.concatenate((use_plot_start, use_plot_end)))
@@ -656,7 +661,7 @@ class GreyGas:
         '''Set up basic plot info'''
         nPlots = 1 + int(tau_array is not None) + int(flux_array is not None)
         if nPlots > 1:
-            fig, axs = plt.subplots(1, nPlots, sharey=True)
+            fig, axs = plt.subplots(1, nPlots, sharey=True, figsize=(6*nPlots, 5))
             ax = axs[0]
         else:
             fig, ax = plt.subplots(1, 1)
