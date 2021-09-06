@@ -6,4 +6,5 @@ sigma = get_constant('stefan_boltzmann_constant', 'W/m^2/K^4')
 p_surface = get_constant('reference_air_pressure', 'Pa')
 p_toa = 20  # top of atmosphere is 20 Pa
 F_sun = get_constant('solar_constant', 'W/m^2')
-
+Omega = get_constant('planetary_rotation_rate', 's^-1')
+a = get_constant('planetary_radius', 'm')
