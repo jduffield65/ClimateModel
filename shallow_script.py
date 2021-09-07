@@ -67,21 +67,21 @@ orography_info = None
 #                   'x0': 0, 'y0': 0, 'x_std': mount_std, 'y_std': mount_std}
 
 """Equatorally trapped waves"""
-# n_days = 10
-# f_0 = 0
-# beta = 2.5e-10
-# initial_info = {'type': 'sinusoidal_zonal', 'u_max': 90, 'n_periods': 1,
-#                 'mean_h_surface': min_h_surface, 'y0': 0, 'add_noise': True}
+n_days = 10
+f_0 = 0
+beta = 2.5e-10
+initial_info = {'type': 'sinusoidal_zonal', 'u_max': 90, 'n_periods': 1,
+                'mean_h_surface': min_h_surface, 'y0': 0, 'add_noise': True}
 
 """Equatorial Kelvin Wave"""
-ny = 100
-n_days = 1
-f_0 = 0
-beta = 5e-10
-h_surface_blob_std = 8*dy
-initial_info = {'type': 'height_gaussian', 'min_h_surface': min_h_surface, 'max_h_surface': max_h_surface,
-                'x0': 0, 'y0': 0, 'x_std': h_surface_blob_std, 'y_std': h_surface_blob_std, 'add_noise': False}
-boundary_type = {'x': 'walls', 'y': 'walls'}
+# ny = 100
+# n_days = 1
+# f_0 = 0
+# beta = 5e-10
+# h_surface_blob_std = 8*dy
+# initial_info = {'type': 'height_gaussian', 'min_h_surface': min_h_surface, 'max_h_surface': max_h_surface,
+#                 'x0': 0, 'y0': 0, 'x_std': h_surface_blob_std, 'y_std': h_surface_blob_std, 'add_noise': False}
+# boundary_type = {'x': 'walls', 'y': 'walls'}
 
 
 """Run simulation"""
@@ -98,4 +98,3 @@ for n in range(0, nt):
 anim = shallow_world.plot_animate(data_dict['t'], data_dict['h'], data_dict['u'], data_dict['v'], nPlotFrames=50, fract_frames_at_start=0)
 # anim.save('shallow.mp4', fps=30, extra_args=['-vcodec', 'libx264'])
 plt.show()
-

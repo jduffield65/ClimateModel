@@ -1,5 +1,5 @@
 """All functions in this file solve:
-du/dt + df/dx + dg/dy = Q
+dU/dt + df(U)/dx + dg(U)/dy = Q(U)
 u is a vector of all the conserved quantities [ n_conserved x nx x ny ]
 f is a function for determining the flux (in x direction) from the conserved quantities
 g is a function for determining the flux (in y direction) from the conserved quantities
@@ -100,9 +100,26 @@ def maccormack(u, f, g, Q, dt, dx, dy, no_source_ind=None):
 
 
 def include_source(u, un, u_new_no_source, Q, no_source_ind, dt):
+    """
+        If source, Q, equals 0 for any conserved value, can update this quantity without source first.
+        Then use updated value of this conserved quantity to compute other conserved quantities
+        for which Q non zero.
+    :param u: numpy array [n_conserved x nx x ny].
+        conserved values to update.
+    :param un: numpy array [n_conserved x nx x ny].
+        conserved values from previous time.
+    :param u_new_no_source: numpy array [n_conserved x nx x ny].
+        conserved values solved for this time step, assuming Q = 0 for all conserved quantities.
+    :param Q: function.
+        Source function
+    :param no_source_ind: list.
+        indices of conserved quantities for which the source is everywhere zero
+    :param dt: float.
+        time-step.
+    :return:
+        the final solution for u with correct source.
+    """
     for i in no_source_ind:
-        # If can update quantity without source then do this first and use updated value to compute
-        # source
         u[i, 1:-1, 1:-1] = u_new_no_source[i]
     u_input_for_source = 0.5 * (u + un)
     u[:, 1:-1, 1:-1] = u_new_no_source + Q(u_input_for_source) * dt
@@ -110,8 +127,14 @@ def include_source(u, un, u_new_no_source, Q, no_source_ind, dt):
 
 
 def centered_diff_x(u, dx):
+    """
+    Centered difference formula to work out du/dx
+    """
     return (u[2:, 1:-1] - u[0:-2, 1:-1]) / (2 * dx)
 
 
 def centered_diff_y(u, dy):
+    """
+    Centered difference formula to work out du/dy
+    """
     return (u[1:-1, 2:] - u[1:-1, 0:-2]) / (2 * dy)

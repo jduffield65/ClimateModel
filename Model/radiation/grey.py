@@ -424,7 +424,7 @@ class GreyGas:
 
     def evolve_to_equilibrium(self, data_dict=None, flux_thresh=1e-3, T_initial=None):
         """
-        This
+        This updates the temperature profile until the equilibrium condition is reached.
 
         :param data_dict: dictionary, optional.
             Must contain 't' and 'T' keys. Can also contain 'tau' and 'flux' keys.
@@ -573,6 +573,7 @@ class GreyGas:
                      log_axis=True, nPlotFrames=100, fract_frames_at_start=0.25, start_step=3, show_last_frame = False):
         """
         This plots an animation showing the evolution of the temperature profile and optical depth profile with time.
+
         :param T_array: list of numpy arrays.
             T_array[i] is the temperature profile at time t_array[i]
         :param t_array: list.
