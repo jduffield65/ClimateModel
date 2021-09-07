@@ -4,6 +4,7 @@ from . import numerical_methods
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from math import log10, floor, ceil
 
 
 class ShallowWater:
@@ -450,7 +451,8 @@ class ShallowWater:
             The remainder will be equally spaced amongst the remaining times.
             default: 0.0
         """
-        fig, axs = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
+        fig, axs = plt.subplots(2, 1, sharex=True, figsize=(12 + int(max([self.nx/250-1, 0])),
+                                                            5 + int(max([self.ny/50-1, 0]))))
         # separate axis for colorbars so can clear them.
         div = make_axes_locatable(axs[0])
         cax1 = div.append_axes('right', '5%', '5%')
@@ -483,14 +485,23 @@ class ShallowWater:
         h_diff_from_median_max = abs(h_surface_plot - median_h_surface).max()
         h_caxis_lims = tuple([median_h_surface - h_diff_from_median_max,
                               median_h_surface + h_diff_from_median_max])
-        # diverging colormap eitherside of 0
+
+        # vorticity - diverging colormap eitherside of 0
+        vorticity_plot = np.array([numerical_methods.centered_diff_x(v_plot[i], self.dx) -
+                     numerical_methods.centered_diff_y(u_plot[i], self.dy)
+                     for i in range(np.size(t_plot))])
+        vort_max = abs(vorticity_plot).max()
+        vort_caxis_lims = (-vort_max, vort_max)
+
         min_grid_space = min([self.dx, self.dy])
         velocity_max = max([abs(u_plot).max(), abs(v_plot).max()])
-        vort_max = max([abs(u_plot).max() / self.dy, abs(v_plot).max() / self.dx])
-        vort_caxis_lims = (-velocity_max / min_grid_space, velocity_max / min_grid_space)
         velocity_scale = min_grid_space * interval / velocity_max  # so arrows show up
-        h_base_max = self.h_base.max()
-        h_contour_interval = h_base_max / 5
+
+        # Contour plot
+        if self.orography_info['type'] != 'flat':
+            round_to_1sf = lambda x: int(round(x, -int(floor(log10(abs(x))))))
+            h_contour_interval = round_to_1sf(self.h_base.max()/10)
+            h_contour_max = ceil(self.h_base.max()/h_contour_interval)*h_contour_interval+1
 
         def animate(i, shallow_world):
             '''What to do at each frame of animation'''
@@ -502,8 +513,7 @@ class ShallowWater:
             u = u_plot[i][1:-1, 1:-1]
             v = v_plot[i][1:-1, 1:-1]
 
-            vorticity = numerical_methods.centered_diff_x(v_plot[i], shallow_world.dx) - \
-                        numerical_methods.centered_diff_y(u_plot[i], shallow_world.dy)
+            vorticity = vorticity_plot[i]
 
             # Plot the height field
             im = axs[0].imshow(np.transpose(h_surface),
@@ -514,7 +524,7 @@ class ShallowWater:
             # Contour the terrain:
             if shallow_world.orography_info['type'] != 'flat':
                 cs = axs[0].contour(x, y, np.transpose(h_base),
-                                    levels=range(1, h_base_max, h_contour_interval), colors='k')
+                                    levels=range(1, h_contour_max, h_contour_interval), colors='g', alpha=0.25)
             # Plot the velocity vectors
             f = lambda x: x * velocity_scale
             Q = axs[0].quiver(x[2::interval], y[2::interval],
