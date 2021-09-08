@@ -15,8 +15,8 @@ def lax_friedrichs(u, f, g, Q, dt, dx, dy, no_source_ind=None):
     sigma_x = dt / dx
     sigma_y = dt / dy
     u_new_no_source = 0.25 * (un[:, 2:, 1:-1] + un[:, 0:-2, 1:-1] + un[:, 1:-1, 2:] + un[:, 1:-1, 0:-2]) - \
-                       0.5 * sigma_x * (f(un[:, 2:, 1:-1]) - f(un[:, 0:-2, 1:-1])) - \
-                       0.5 * sigma_y * (g(un[:, 1:-1, 2:]) - g(un[:, 1:-1, 0:-2]))
+                      0.5 * sigma_x * (f(un[:, 2:, 1:-1]) - f(un[:, 0:-2, 1:-1])) - \
+                      0.5 * sigma_y * (g(un[:, 1:-1, 2:]) - g(un[:, 1:-1, 0:-2]))
     u = include_source(u, un, u_new_no_source, Q, no_source_ind, dt)
     return u
 
@@ -52,9 +52,9 @@ def lax_wendroff(u, f, g, Q, dt, dx, dy, no_source_ind, nx, ny, A, B):
     B_minus_half_term = jacobian_mult(B_minus_half, g(un[:, 1:-1, 1:-1]) - g(un[:, 1:-1, 0:-2]), nx - 2, ny - 2)
 
     u_new_no_source = un[:, 1:-1, 1:-1] - 0.5 * sigma_x * (f(un[:, 2:, 1:-1]) - f(un[:, 0:-2, 1:-1])) + \
-                       0.5 * sigma_x ** 2 * (A_plus_half_term - A_minus_half_term) - \
-                       0.5 * sigma_y * (g(un[:, 1:-1, 2:]) - g(un[:, 1:-1, 0:-2])) + \
-                       0.5 * sigma_y ** 2 * (B_plus_half_term - B_minus_half_term)
+                      0.5 * sigma_x ** 2 * (A_plus_half_term - A_minus_half_term) - \
+                      0.5 * sigma_y * (g(un[:, 1:-1, 2:]) - g(un[:, 1:-1, 0:-2])) + \
+                      0.5 * sigma_y ** 2 * (B_plus_half_term - B_minus_half_term)
     u = include_source(u, un, u_new_no_source, Q, no_source_ind, dt)
     return u
 
@@ -66,11 +66,11 @@ def richtmyer(u, f, g, Q, dt, dx, dy, no_source_ind=None):
     sigma_x = dt / dx
     sigma_y = dt / dy
     u_minus_half_x = 0.5 * (un[:, 1:, 1:-1] + un[:, 0:-1, 1:-1]) - 0.5 * sigma_x * \
-                    (f(un[:, 1:, 1:-1]) - f(un[:, 0:-1, 1:-1]))
+                     (f(un[:, 1:, 1:-1]) - f(un[:, 0:-1, 1:-1]))
     # u_minus_half_x = 0.5 * (un[:, 1:-1, 1:-1] + un[:, 0:-2, 1:-1]) - 0.5 * sigma_x * \
     #                 (f(un[:, 1:-1, 1:-1]) - f(un[:, 0:-2, 1:-1]))
     u_minus_half_y = 0.5 * (un[:, 1:-1, 1:] + un[:, 1:-1, 0:-1]) - 0.5 * sigma_y * \
-                    (g(un[:, 1:-1, 1:]) - g(un[:, 1:-1, 0:-1]))
+                     (g(un[:, 1:-1, 1:]) - g(un[:, 1:-1, 0:-1]))
     # u_minus_half_y = 0.5 * (un[:, 1:-1, 1:-1] + un[:, 1:-1, 0:-2]) - 0.5 * sigma_y * \
     #                 (g(un[:, 1:-1, 1:-1]) - g(un[:, 1:-1, 0:-2]))
     u_new_no_source = un[:, 1:-1, 1:-1] - \
@@ -86,15 +86,21 @@ def maccormack(u, f, g, Q, dt, dx, dy, no_source_ind=None):
     un = u.copy()  # copy the existing values of u into un
     sigma_x = dt / dx
     sigma_y = dt / dy
-    u_pred = un[:, 1:-1, 1:-1] - sigma_x * (f(un[:, 2:, 1:-1]) - f(un[:, 1:-1, 1:-1])) - \
-             sigma_y * (g(un[:, 1:-1, 2:]) - g(un[:, 1:-1, 1:-1]))
-    u_pred_minus_x = un[:, 0:-2, 1:-1] - sigma_x * (f(un[:, 1:-1, 1:-1]) - f(un[:, 0:-2, 1:-1])) - \
-                     sigma_y * (g(un[:, 0:-2, 2:]) - g(un[:, 0:-2, 1:-1]))
-    u_pred_minus_y = un[:, 1:-1, 0:-2] - sigma_x * (f(un[:, 2:, 0:-2]) - f(un[:, 1:-1, 0:-2])) - \
-                     sigma_y * (g(un[:, 1:-1, 1:-1]) - g(un[:, 1:-1, 0:-2]))
-    u_new_no_source = 0.5 * (un[:, 1:-1, 1:-1] + u_pred) - \
-                       0.5 * sigma_x * (f(u_pred) - f(u_pred_minus_x)) - \
-                       0.5 * sigma_x * (g(u_pred) - g(u_pred_minus_y))
+    u_pred_minus_x_minus_y = un[:, 0:-1, 0:-1] - sigma_x * (f(un[:, 1:, 0:-1]) - f(un[:, 0:-1, 0:-1])) - \
+                             sigma_y * (g(un[:, 0:-1, 1:]) - g(un[:, 0:-1, 0:-1]))
+    u_new_no_source = 0.5 * (un[:, 1:-1, 1:-1] + u_pred_minus_x_minus_y[:, 1:, 1:]) - \
+                      0.5 * sigma_x * (f(u_pred_minus_x_minus_y[:, 1:, 1:]) - f(u_pred_minus_x_minus_y[:, 0:-1, 1:])) - \
+                      0.5 * sigma_x * (g(u_pred_minus_x_minus_y[:, 1:, 1:]) - g(u_pred_minus_x_minus_y[:, 1:, 0:-1]))
+
+    # u_pred = un[:, 1:-1, 1:-1] - sigma_x * (f(un[:, 2:, 1:-1]) - f(un[:, 1:-1, 1:-1])) - \
+    #          sigma_y * (g(un[:, 1:-1, 2:]) - g(un[:, 1:-1, 1:-1]))
+    # u_pred_minus_x = un[:, 0:-2, 1:-1] - sigma_x * (f(un[:, 1:-1, 1:-1]) - f(un[:, 0:-2, 1:-1])) - \
+    #                  sigma_y * (g(un[:, 0:-2, 2:]) - g(un[:, 0:-2, 1:-1]))
+    # u_pred_minus_y = un[:, 1:-1, 0:-2] - sigma_x * (f(un[:, 2:, 0:-2]) - f(un[:, 1:-1, 0:-2])) - \
+    #                  sigma_y * (g(un[:, 1:-1, 1:-1]) - g(un[:, 1:-1, 0:-2]))
+    # u_new_no_source = 0.5 * (un[:, 1:-1, 1:-1] + u_pred) - \
+    #                    0.5 * sigma_x * (f(u_pred) - f(u_pred_minus_x)) - \
+    #                    0.5 * sigma_x * (g(u_pred) - g(u_pred_minus_y))
     u = include_source(u, un, u_new_no_source, Q, no_source_ind, dt)
     return u
 

@@ -1,4 +1,4 @@
-from ..constants import g
+from ..constants import g as g_earth
 import numpy as np
 from . import numerical_methods
 import matplotlib.pyplot as plt
@@ -9,7 +9,7 @@ from math import log10, floor, ceil
 
 class ShallowWater:
     def __init__(self, nx, ny, dx, dy, dt, f_0, beta, orography_info=None, initial_info=None,
-                 boundary_type=None, numerical_solver='richtmyer'):
+                 boundary_type=None, numerical_solver='richtmyer', r=0, g=g_earth, linear=False):
         """
         Sets horizontal velocities u and v as well as fluid depth, h, to initial values.
 
@@ -44,6 +44,15 @@ class ShallowWater:
             dU/dt + dF(U)/dx + dG(U)/dy = Q(U).
             Options are 'lax_friedrichs', 'lax_wendroff', 'richtmyer', 'maccormack'.
             default: 'richtmyer'
+        :param r: float, optional.
+            damping coefficient (s^-1)
+            default: 0
+        :param g: float, optional.
+            gravitational acceleration (ms^-2)
+            default: 9.81
+        :param linear: boolean, optional.
+            whether to use linearized equations or not.
+            default: False
         """
         self.nx = nx
         self.ny = ny
@@ -51,6 +60,9 @@ class ShallowWater:
         self.dy = dy
         self.dt_0 = dt
         self.dt = dt
+        self.r = r
+        self.g = g
+        self.linear = linear
         self.numerical_solver = numerical_solver
         self.numerical_func, self.numerical_args = self.get_numerical_func()
         self.orography_info = orography_info
@@ -69,6 +81,7 @@ class ShallowWater:
         self.u, self.v, self.h_surface = self.initial_conditions()
         self.h = self.h_surface - self.h_base  # fluid depth
         self.h, self.u, self.v = self.boundary_conditions(self.h, self.u, self.v)
+        self.h_mean = self.h.mean()
 
     def get_numerical_func(self):
         """
@@ -118,8 +131,8 @@ class ShallowWater:
         """
         u = np.zeros((self.nx, self.ny))
         v = np.zeros((self.nx, self.ny))
-        u[1:-1, 1:-1] = -g * numerical_methods.centered_diff_y(h_surface, self.dy) / self.f_coriolis[1:-1, 1:-1]
-        v[1:-1, 1:-1] = g * numerical_methods.centered_diff_x(h_surface, self.dx) / self.f_coriolis[1:-1, 1:-1]
+        u[1:-1, 1:-1] = -self.g * numerical_methods.centered_diff_y(h_surface, self.dy) / self.f_coriolis[1:-1, 1:-1]
+        v[1:-1, 1:-1] = self.g * numerical_methods.centered_diff_x(h_surface, self.dx) / self.f_coriolis[1:-1, 1:-1]
         return u, v
 
     def initial_conditions(self):
@@ -144,7 +157,7 @@ class ShallowWater:
             # desired speed 'u_mean' everywhere once geostrophic equilibrium has been applied.
 
             # compute surface so in geostrophic equilibrium
-            h_surface = self.initial_info['mean_h_surface'] - (self.initial_info['u_mean'] * self.f_0 / g) * self.Y
+            h_surface = self.initial_info['mean_h_surface'] - (self.initial_info['u_mean'] * self.f_0 / self.g) * self.Y
             u, v = self.get_geostrophic_velocities(h_surface)
         elif self.initial_info['type'] == 'sinusoidal_zonal':
             # zonal wind oscillates between eastward to westward with latitude, y.
@@ -155,9 +168,9 @@ class ShallowWater:
             cos_multiplier = 2 * self.initial_info['n_periods'] * np.pi / np.max(self.Y)
             if self.f_0 == 0:
                 # Does not give make u_max equal to 'u_max' in this case but order of magnitude.
-                h_jet_max = abs(self.f_coriolis).mean() * self.initial_info['u_max'] / (cos_multiplier * g)
+                h_jet_max = abs(self.f_coriolis).mean() * self.initial_info['u_max'] / (cos_multiplier * self.g)
             else:
-                h_jet_max = self.f_0 * self.initial_info['u_max'] / (cos_multiplier * g)
+                h_jet_max = self.f_0 * self.initial_info['u_max'] / (cos_multiplier * self.g)
             h_surface = self.initial_info['mean_h_surface'] - h_jet_max * \
                         np.cos((self.Y - self.initial_info['y0']) * cos_multiplier)
             u, v = self.get_geostrophic_velocities(h_surface)
@@ -165,7 +178,7 @@ class ShallowWater:
             # sharp peak in zonal wind at a y = 'y0' of width 'jet_width' and max speed 'u_max'.
             # 'mean_h_surface' is height from which h_surface oscillates
             # Bickley jet is sech^2 so in geostrophic equilibrium, h is tanh.
-            h_jet_max = self.f_0 * self.initial_info['u_max'] * self.initial_info['jet_width'] / g
+            h_jet_max = self.f_0 * self.initial_info['u_max'] * self.initial_info['jet_width'] / self.g
             h_surface = self.initial_info['mean_h_surface'] - \
                         h_jet_max * np.tanh((self.Y - self.initial_info['y0']) / self.initial_info['jet_width'])
             u, v = self.get_geostrophic_velocities(h_surface)
@@ -190,11 +203,22 @@ class ShallowWater:
                 max_zone = np.where(self.X > self.initial_info['discontinuity_pos'])
             h_surface[min_zone] = self.initial_info['min_h_surface']
             h_surface[max_zone] = self.initial_info['max_h_surface']
+        elif self.initial_info['type'] == 'el_nino':
+            # height (thermocline) deepens linearly towards the west and falls off exponentially
+            # away from the equator.
+            # 'max_h_surface' is height of the thermocline at y = 0 on the west boundary.
+            # 'min_h_surface' is height of the thermocline at y = 0 on the east boundary.
+            # 'y_std' is the distance over which h_surface falls off in the y direction.
+            x_gradient = -((self.initial_info['max_h_surface'] - self.initial_info['min_h_surface']) /
+                           (self.X.max() - self.X.min()))
+            h_surface_mean = 0.5 * (self.initial_info['max_h_surface'] + self.initial_info['min_h_surface'])
+            h_surface = h_surface_mean + self.X * x_gradient * \
+                        np.exp(-0.5 * ((self.Y - 0) / self.initial_info['y_std']) ** 2)
         else:
             raise ValueError("initial_info['type'] not valid")
         if self.initial_info['add_noise']:
             # Add noise that doesn't significantly change initial structure of h_surface.
-            noise_amplitude = max(np.mean(abs(np.diff(h_surface)))/10, 1e-20)
+            noise_amplitude = max(np.mean(abs(np.diff(h_surface))) / 10, 1e-20)
             noise = np.random.randn(*np.shape(self.X)) * noise_amplitude
             h_surface = h_surface + noise
         if np.min(h_surface) < np.max(self.h_base):
@@ -210,8 +234,8 @@ class ShallowWater:
             default: 0.1
         """
         # keep courant number less than 1
-        max_u = np.sqrt((self.u**2 + self.v**2).max())
-        #max_u = np.max([abs(self.u).max(), abs(self.v).max()])
+        max_u = np.sqrt((self.u ** 2 + self.v ** 2).max())
+        # max_u = np.max([abs(self.u).max(), abs(self.v).max()])
         self.dt = min(self.dt_0, target_courant * min(self.dx, self.dy) / max_u)
         if self.dt < 1e-20:
             raise ValueError("time step very small")
@@ -219,7 +243,7 @@ class ShallowWater:
         numerical_args[3] = self.dt
         self.numerical_args = tuple(numerical_args)
 
-    def time_step(self, t, data_dict=None):
+    def time_step(self, t, data_dict=None, save_every=0.1):
         """
         This updates h, u and v by solving the shallow water equations for a single time step
         and then imposing the boundary conditions.
@@ -229,6 +253,9 @@ class ShallowWater:
             Dictionary containing lists of t, h, u and v data. If given, will append new values to it after
             time stepping.
             default: None.
+        :param save_every: float, optional.
+            Only update data_dictionary at times near to save_every in seconds.
+            default: 0.1 meaning basically all data saved.
         :return:
             t, data_dict
         """
@@ -239,11 +266,14 @@ class ShallowWater:
         U = self.get_conservative_form(self.h, self.u, self.v)
         U = self.numerical_func(U, *self.numerical_args)
         h, u, v = self.get_physical_values(U)
+        u = u - self.r * self.dt * self.u
+        v = v - self.r * self.dt * self.v
         self.h, self.u, self.v = self.boundary_conditions(h, u, v)
         if self.h.min() < 0:
             raise ValueError("surface height is less than floor height")
         t = t + self.dt
-        data_dict = self.save_data(data_dict, t)
+        if np.divmod(t, save_every)[1] < self.dt:
+            data_dict = self.save_data(data_dict, t)
         return t, data_dict
 
     def save_data(self, data_dict, t):
@@ -317,8 +347,7 @@ class ShallowWater:
                 field[:, -1] = field[:, -2]
         return h, u, v
 
-    @staticmethod
-    def get_conservative_form(h, u, v):
+    def get_conservative_form(self, h, u, v):
         """
         Put h, u, v into vector U = (h, uh, vh) for solving shallow water equations.
 
@@ -332,12 +361,15 @@ class ShallowWater:
         """
         U = np.zeros((3,) + np.shape(h))
         U[0] = h
-        U[1] = h * u
-        U[2] = h * v
+        if self.linear:
+            U[1] = u
+            U[2] = v
+        else:
+            U[1] = h * u
+            U[2] = h * v
         return U
 
-    @staticmethod
-    def get_physical_values(U):
+    def get_physical_values(self, U):
         """
         Recover physical values from conserved values, U, after solving shallow water equations.
 
@@ -346,48 +378,59 @@ class ShallowWater:
         :return:
         """
         h = U[0]
-        # set cases where divide by zero to 0 not nan.
-        u = U[1] / h
-        v = U[2] / h
+        if self.linear:
+            u = U[1]
+            v = U[2]
+        else:
+            u = U[1] / h
+            v = U[2] / h
         return h, u, v
 
-    @staticmethod
-    def flux_x(U):
+    def flux_x(self, U):
         """
         returns F(U) in the equation dU/dt + dF(U)/dx + dG(U)/dy = Q(U)
         :param U: numpy array [3 x nx x ny]
             U = (h, uh, vh)
         """
         f = U.copy()
-        f[0] = U[1]
-        f[1] = U[1] ** 2 / U[0] + 0.5 * g * U[0] ** 2
-        f[2] = U[1] * U[2] / U[0]
+        if self.linear:
+            f[0] = self.h_mean * U[1]
+            f[1] = self.g * U[0]
+            f[2] = 0
+        else:
+            f[0] = U[1]
+            f[1] = U[1] ** 2 / U[0] + 0.5 * self.g * U[0] ** 2
+            f[2] = U[1] * U[2] / U[0]
         return f
 
-    @staticmethod
-    def flux_y(U):
+    def flux_y(self, U):
         """
         returns G(U) in the equation dU/dt + dF(U)/dx + dG(U)/dy = Q(U)
         :param U: numpy array [3 x nx x ny]
             U = (h, uh, vh)
         """
         f = U.copy()
-        f[0] = U[2]
-        f[1] = U[1] * U[2] / U[0]
-        f[2] = U[2] ** 2 / U[0] + 0.5 * g * U[0] ** 2
+        if self.linear:
+            f[0] = self.h_mean * U[2]
+            f[1] = 0
+            f[2] = self.g * U[0]
+        else:
+            f[0] = U[2]
+            f[1] = U[1] * U[2] / U[0]
+            f[2] = U[2] ** 2 / U[0] + 0.5 * self.g * U[0] ** 2
         return f
 
-    @staticmethod
-    def jacobian_x(U):
+    def jacobian_x(self, U):
         """
         The 'lax_wendroff' numerical method requires the jacobian matrix A = dF(U)/dU.
+        ONLY WORKS FOR NON-LINEAR AT THE MOMENT
         :param U: numpy array [3 x nx x ny]
             U = (h, uh, vh)
         :return:
             A: [nx x ny x 3 x 3] numpy array.
         """
         A = np.zeros(np.shape(U[0, :, :]) + (3, 3))
-        A[:, :, 1, 0] = -U[2] ** 2 / U[0] ** 2 + g * U[0]
+        A[:, :, 1, 0] = -U[2] ** 2 / U[0] ** 2 + self.g * U[0]
         A[:, :, 2, 0] = -U[1] * U[2] / U[0] ** 2
         A[:, :, 0, 1] = 1
         A[:, :, 1, 1] = 2 * U[1] / U[0]
@@ -395,10 +438,10 @@ class ShallowWater:
         A[:, :, 2, 2] = U[1] / U[0]
         return A
 
-    @staticmethod
-    def jacobian_y(U):
+    def jacobian_y(self, U):
         """
         The 'lax_wendroff' numerical method requires the jacobian matrix B = dG(U)/dU.
+        ONLY WORKS FOR NON-LINEAR AT THE MOMENT
         :param U: numpy array [3 x nx x ny]
             U = (h, uh, vh)
         :return:
@@ -406,7 +449,7 @@ class ShallowWater:
         """
         B = np.zeros(np.shape(U[0, :, :]) + (3, 3))
         B[:, :, 1, 0] = -U[1] * U[2] / U[0] ** 2
-        B[:, :, 2, 0] = -U[2] ** 2 / U[0] ** 2 + g * U[0]
+        B[:, :, 2, 0] = -U[2] ** 2 / U[0] ** 2 + self.g * U[0]
         B[:, :, 1, 1] = U[2] / U[0]
         B[:, :, 0, 2] = 1
         B[:, :, 1, 2] = U[1] / U[0]
@@ -422,10 +465,13 @@ class ShallowWater:
         """
         Q = np.zeros(np.subtract(np.shape(U), (0, 2, 2)))
         h, u, v = self.get_physical_values(U[:, 1:-1, 1:-1])
-        Q[1] = h * (self.f_coriolis[1:-1, 1:-1] * v -
-                    g * numerical_methods.centered_diff_x(self.h_base, self.dx))
-        Q[2] = h * (-self.f_coriolis[1:-1, 1:-1] * u -
-                    g * numerical_methods.centered_diff_y(self.h_base, self.dy))
+        Q[1] = self.f_coriolis[1:-1, 1:-1] * v - \
+               self.g * numerical_methods.centered_diff_x(self.h_base, self.dx)
+        Q[2] = -self.f_coriolis[1:-1, 1:-1] * u - \
+               self.g * numerical_methods.centered_diff_y(self.h_base, self.dy)
+        if not self.linear:
+            Q[1] = h * Q[1]
+            Q[2] = h * Q[2]
         return Q
 
     def plot_animate(self, t_array, h_array, u_array, v_array, nPlotFrames=50, fract_frames_at_start=0.0):
@@ -451,8 +497,8 @@ class ShallowWater:
             The remainder will be equally spaced amongst the remaining times.
             default: 0.0
         """
-        fig, axs = plt.subplots(2, 1, sharex=True, figsize=(12 + int(max([self.nx/250-1, 0])),
-                                                            5 + int(max([self.ny/50-1, 0]))))
+        fig, axs = plt.subplots(2, 1, sharex=True, figsize=(12 + int(max([self.nx / 250 - 1, 0])),
+                                                            5 + int(max([self.ny / 50 - 1, 0]))))
         # separate axis for colorbars so can clear them.
         div = make_axes_locatable(axs[0])
         cax1 = div.append_axes('right', '5%', '5%')
@@ -488,8 +534,8 @@ class ShallowWater:
 
         # vorticity - diverging colormap eitherside of 0
         vorticity_plot = np.array([numerical_methods.centered_diff_x(v_plot[i], self.dx) -
-                     numerical_methods.centered_diff_y(u_plot[i], self.dy)
-                     for i in range(np.size(t_plot))])
+                                   numerical_methods.centered_diff_y(u_plot[i], self.dy)
+                                   for i in range(np.size(t_plot))])
         vort_max = abs(vorticity_plot).max()
         vort_caxis_lims = (-vort_max, vort_max)
 
@@ -500,8 +546,8 @@ class ShallowWater:
         # Contour plot
         if self.orography_info['type'] != 'flat':
             round_to_1sf = lambda x: int(round(x, -int(floor(log10(abs(x))))))
-            h_contour_interval = round_to_1sf(self.h_base.max()/10)
-            h_contour_max = ceil(self.h_base.max()/h_contour_interval)*h_contour_interval+1
+            h_contour_interval = round_to_1sf(self.h_base.max() / 10)
+            h_contour_max = ceil(self.h_base.max() / h_contour_interval) * h_contour_interval + 1
 
         def animate(i, shallow_world):
             '''What to do at each frame of animation'''
@@ -558,3 +604,49 @@ class ShallowWater:
         anim = FuncAnimation(fig, animate, frames=np.size(t_plot), interval=100,
                              blit=False, repeat_delay=200, fargs=(self,))
         return anim
+
+    @staticmethod
+    def el_nino_plot(t, h, X, Y, x_average_width, y_average_width):
+        """
+        Plots the oscillation in thermocline depth at east and west boundary as a function of time.
+
+        :param t: numpy array [nt]
+            array of times for which thermocline depth was calculated in simulation.
+        :param h: numpy array [nt x nx x ny]
+            h[i, :, :] is the thermocline depth field at time t[i].
+        :param X: numpy array [nx x ny]
+            x coordinate at each point on grid.
+        :param Y: numpy array [nx x ny]
+            y coordinate at each point on grid.
+        :param x_average_width: float.
+            The average thermocline depth at the east and west boundary is plotted. The average over x
+            takes place over this distance (m).
+        :param y_average_width: float.
+            The average over y takes place over this distance (m) i.e. between +/- y_average_width/2 of the
+            equator.
+        """
+        x_east_avg_range = np.where(X[:, 0] >= X.max() - x_average_width)[0]
+        x_west_avg_range = np.where(X[:, 0] <= X.min() + x_average_width)[0]
+        y_avg_range = np.where(abs(Y[0]) <= y_average_width/2)[0]
+        h_y_avg_range = h[:, :, y_avg_range]
+        h_east = h_y_avg_range[:, x_east_avg_range, :]
+        h_west = h_y_avg_range[:, x_west_avg_range, :]
+        h_east_average = np.mean(np.mean(h_east, 1), 1)
+        h_west_average = np.mean(np.mean(h_west, 1), 1)
+
+        h_average = h[0, :, :].mean()  # average height, ensure this height is in the middle.
+        h_axis_range = max(abs(h_east_average-h_average).max(), abs(h_west_average-h_average).max())
+        h_axis_range = ceil(h_axis_range * 10) / 10 # round to 1 decimal place
+        t_days = t / 24 / 60**2
+
+        fig, ax = plt.subplots(1, 1)
+        ax.plot(t_days, h_east_average, label=r'$\overline{h}_{east}$')
+        ax.plot(t_days, h_west_average, label=r'$\overline{h}_{west}$')
+        ax.set_ylim((h_average-h_axis_range, h_average+h_axis_range))
+        ax.set_xlim(0, ceil(t_days.max()))
+        ax.set_ylabel('Thermocline Depth / m')
+        ax.set_xlabel('Time / days')
+        ax.legend()
+        plt.title('Oscillation in east and west boundary thermocline depth')
+        return fig
+
