@@ -76,6 +76,7 @@ class ShallowWater:
         y = y - np.mean(y)  # Meridional distance coordinate (m), centre at 0
         [self.Y, self.X] = np.meshgrid(y, x)  # Create matrices of the coordinate variables
         self.f_0 = f_0
+        self.beta = beta
         self.f_coriolis = f_0 + beta * self.Y  # f0 = 2omega sin(theta). beta = 2omega cos(theta) / R_earth
         self.h_base = self.orography()
         self.u, self.v, self.h_surface = self.initial_conditions()
@@ -498,7 +499,7 @@ class ShallowWater:
             default: 0.0
         """
         fig, axs = plt.subplots(2, 1, sharex=True, figsize=(12 + int(max([self.nx / 250 - 1, 0])),
-                                                            5 + int(max([self.ny / 50 - 1, 0]))))
+                                                            6 + int(max([self.ny / 50 - 1, 0]))))
         # separate axis for colorbars so can clear them.
         div = make_axes_locatable(axs[0])
         cax1 = div.append_axes('right', '5%', '5%')
@@ -521,8 +522,16 @@ class ShallowWater:
             u_plot = u_plot[use_plot]
             v_plot = v_plot[use_plot]
 
-        x = self.X[1:-1, 0]
-        y = self.Y[0, 1:-1]
+        # normalise grid x and y dimensions
+        c = np.sqrt(self.g * np.median(h_plot[0]))
+        if self.f_0 == 0 and self.beta == 0:
+            L_def = c * 60**2
+        elif self.f_0 != 0:
+            L_def = c / self.f_0
+        elif self.beta != 0:
+            L_def = np.sqrt(c / self.beta)
+        x = self.X[1:-1, 0] / L_def
+        y = self.Y[0, 1:-1] / L_def
         # plot surface height not fluid depth
         h_base = self.h_base[1:-1, 1:-1]
         h_surface_plot = h_plot[:, 1:-1, 1:-1] + h_base
@@ -539,8 +548,9 @@ class ShallowWater:
         vort_max = abs(vorticity_plot).max()
         vort_caxis_lims = (-vort_max, vort_max)
 
-        min_grid_space = min([self.dx, self.dy])
-        velocity_max = max([abs(u_plot).max(), abs(v_plot).max()])
+        # scale velocity so you can see the arrows
+        min_grid_space = min([self.dx / L_def, self.dy / L_def])
+        velocity_max = np.sqrt((u_plot**2 + v_plot**2).max())
         velocity_scale = min_grid_space * interval / velocity_max  # so arrows show up
 
         # Contour plot
@@ -577,7 +587,6 @@ class ShallowWater:
                               f(np.transpose(u[2::interval, 2::interval])),
                               f(np.transpose(v[2::interval, 2::interval])),
                               scale_units='xy', scale=1, minshaft=2, pivot='mid')
-            axs[0].set_ylabel('Y distance (m)')
 
             # Now plot the vorticity
             im2 = axs[1].imshow(np.transpose(vorticity), extent=[np.min(x), np.max(x), np.min(y), np.max(y)],
@@ -585,10 +594,18 @@ class ShallowWater:
             # Set other axes properties and plot a colorbar
             cb2 = fig.colorbar(im2, cax=cax2)
             cb2.set_label('vorticity (s$^{-1}$)')
-            axs[1].set_xlabel('X distance (m)')
-            axs[1].set_ylabel('Y distance (m)')
-            # axs[1].set_title('Relative vorticity (s$^{-1}$)')
-            # tx2 = ax2.text(0, np.max(y_1000km), 'Time = %.1f hours' % (t_save[it] / 3600.))
+            if shallow_world.f_0 == 0 and shallow_world.beta == 0:
+                axs[1].set_xlabel(r'$X / 3600\sqrt{gh_{mean}}$')
+                axs[1].set_ylabel(r'$Y / 3600\sqrt{gh_{mean}}$')
+                axs[0].set_ylabel(r'$Y / 3600\sqrt{gh_{mean}}$')
+            if shallow_world.f_0 != 0:
+                axs[1].set_xlabel(r'$X / \frac{\sqrt{gh_{mean}}}{f_0}$')
+                axs[1].set_ylabel(r'$Y / \frac{\sqrt{gh_{mean}}}{f_0}$')
+                axs[0].set_ylabel(r'$Y / \frac{\sqrt{gh_{mean}}}{f_0}$')
+            elif shallow_world.beta != 0:
+                axs[1].set_xlabel(r'$X / \sqrt{\frac{\sqrt{gh_{mean}}}{\beta}}$')
+                axs[1].set_ylabel(r'$Y / \sqrt{\frac{\sqrt{gh_{mean}}}{\beta}}$')
+                axs[0].set_ylabel(r'$Y / \sqrt{\frac{\sqrt{gh_{mean}}}{\beta}}$')
 
             im.set_clim(h_caxis_lims)
             im2.set_clim(vort_caxis_lims)
@@ -640,8 +657,8 @@ class ShallowWater:
         t_days = t / 24 / 60**2
 
         fig, ax = plt.subplots(1, 1)
-        ax.plot(t_days, h_east_average, label=r'$\overline{h}_{east}$')
-        ax.plot(t_days, h_west_average, label=r'$\overline{h}_{west}$')
+        ax.plot(t_days, h_east_average, label=r'$\overline{h}_{east}$', color='b')
+        ax.plot(t_days, h_west_average, label=r'$\overline{h}_{west}$', color='r')
         ax.set_ylim((h_average-h_axis_range, h_average+h_axis_range))
         ax.set_xlim(0, ceil(t_days.max()))
         ax.set_ylabel('Thermocline Depth / m')
@@ -649,4 +666,3 @@ class ShallowWater:
         ax.legend()
         plt.title('Oscillation in east and west boundary thermocline depth')
         return fig
-
