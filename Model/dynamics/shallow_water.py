@@ -75,6 +75,10 @@ class ShallowWater:
         y = np.mgrid[0:ny] * dy
         y = y - np.mean(y)  # Meridional distance coordinate (m), centre at 0
         [self.Y, self.X] = np.meshgrid(y, x)  # Create matrices of the coordinate variables
+        if boundary_type['y'] == 'walls' and 'y_walls_damp' in boundary_type:
+            border_range = np.where(abs(self.Y[0]) >= boundary_type['y_walls_damp']['dist_thresh'])[0]
+            self.r = np.ones((nx, ny)) * r
+            self.r[:, border_range] = boundary_type['y_walls_damp']['r']
         self.f_0 = f_0
         self.beta = beta
         self.f_coriolis = f_0 + beta * self.Y  # f0 = 2omega sin(theta). beta = 2omega cos(theta) / R_earth
@@ -215,6 +219,88 @@ class ShallowWater:
             h_surface_mean = 0.5 * (self.initial_info['max_h_surface'] + self.initial_info['min_h_surface'])
             h_surface = h_surface_mean + self.X * x_gradient * \
                         np.exp(-0.5 * ((self.Y - 0) / self.initial_info['y_std']) ** 2)
+            # compute approximate initial westward (negative) wind stress which keeps thermocline deeper in west.
+            # to use for default 'gamma'  and 'seasonal_fluct' value
+            initial_tau_over_h_guess = x_gradient * self.g
+
+            # Get atmospheric wind information in self.initial_info['type']['wind']
+            # 'type': 'unforced', 'seasonal', 'forced' or 'seasonal_forced'. Specifies the type of wind interaction.
+            # 'gamma': specifies the strength of the Bjerknes feedback between ocean and atmosphere.
+            # 'seasonal_fluct': the magnitude of seasonal oscillation in westward winds.
+            # 'x_average_width': distance over which to compute average thermocline thickness in x.
+            # 'y_average_width': distance over which to compute average thermocline thickness in y.
+
+            # If don't give a key, set to default value.
+            wind_keys = ['gamma', 'seasonal_fluct', 'x_average_width', 'y_average_width']
+            for key in wind_keys:
+                if key not in self.initial_info['wind']:
+                    self.initial_info['wind'][key] = None
+            # Work out default values
+            if self.initial_info['wind']['gamma'] is None:
+                # choose gamma automatically so wind can become eastward.
+                self.initial_info['wind']['gamma'] = 0.3 * abs(initial_tau_over_h_guess) / (
+                        self.initial_info['max_h_surface'] - self.initial_info['min_h_surface'])
+            if self.initial_info['wind']['x_average_width'] is None:
+                c = np.sqrt(self.g * h_surface_mean)
+                L_def = np.sqrt(c / self.beta)
+                self.initial_info['wind']['x_average_width'] = 8 * L_def
+            if self.initial_info['wind']['y_average_width'] is None:
+                c = np.sqrt(self.g * h_surface_mean)
+                L_def = np.sqrt(c / self.beta)
+                self.initial_info['wind']['y_average_width'] = 8 * L_def
+
+            # compute exact initial westward (negative) wind stress which keeps thermocline deeper in west.
+            # Can get exact value as now we have 'gamma', 'x_average_width' and 'y_average_width'
+            h = h_surface - self.h_base
+            h = self.boundary_conditions(h, u, v)[0]
+            h_east, h_west = \
+                self.get_average_east_west_boundary_thickness(h,
+                                                              self.initial_info['wind']['x_average_width'],
+                                                              self.initial_info['wind']['y_average_width'])
+            self.initial_info['wind']['initial_tau_over_h'] = self.initial_info['wind']['gamma'] * (h_east - h_west)
+
+            if self.initial_info['wind']['seasonal_fluct'] is None:
+                # set seasonal fluctuation to always keep winds westward.
+                self.initial_info['wind']['seasonal_fluct'] = abs(self.initial_info['wind']['initial_tau_over_h'])/2
+
+            def atmosphere_wind(shallow_world, h, t):
+                """
+                Computes the atmospheric wind interaction with the ocean as specified by
+                shallow_world.initial_info['wind']['type']
+
+                :param shallow_world: ShallowWater class
+                :param h: numpy array [nx x ny]
+                    thermocline thickness field
+                :param t: float.
+                    time, used to compute seasonal variation.
+                :return:
+                    wind: tau/h_mean wind stress term in shallow water u equation
+                """
+                if shallow_world.initial_info['wind']['type'] == 'unforced':
+                    wind = 0
+                elif shallow_world.initial_info['wind']['type'] == 'seasonal':
+                    wind = shallow_world.el_nino_seasonal_wind(t)
+                else:
+                    # ensure h satisfies bcs as finding average at boundaries.
+                    h = shallow_world.boundary_conditions(h, shallow_world.u, shallow_world.v)[0]
+                    h_east, h_west = \
+                        shallow_world.get_average_east_west_boundary_thickness(h,
+                                                                               shallow_world.initial_info['wind']
+                                                                               ['x_average_width'],
+                                                                               shallow_world.initial_info['wind']
+                                                                               ['y_average_width'])
+                    wind_forced = self.initial_info['wind']['gamma'] * (h_east - h_west)
+                    if shallow_world.initial_info['wind']['type'] == 'seasonal_forced':
+                        wind = wind_forced + shallow_world.el_nino_seasonal_wind(t) - \
+                               self.initial_info['wind']['initial_tau_over_h']
+                    elif shallow_world.initial_info['wind']['type'] == 'forced':
+                        wind = wind_forced #+ self.initial_info['wind']['intercept']
+                    else:
+                        raise ValueError("initial_info['wind']['type'] not valid")
+                return wind
+
+            self.initial_info['wind']['function'] = atmosphere_wind
+
         else:
             raise ValueError("initial_info['type'] not valid")
         if self.initial_info['add_noise']:
@@ -269,6 +355,9 @@ class ShallowWater:
         h, u, v = self.get_physical_values(U)
         u = u - self.r * self.dt * self.u
         v = v - self.r * self.dt * self.v
+        if self.initial_info['type'] == 'el_nino':
+            wind_stress = self.initial_info['wind']['function'](self, h, t)
+            u = u + wind_stress * self.dt
         self.h, self.u, self.v = self.boundary_conditions(h, u, v)
         if self.h.min() < 0:
             raise ValueError("surface height is less than floor height")
@@ -525,7 +614,7 @@ class ShallowWater:
         # normalise grid x and y dimensions
         c = np.sqrt(self.g * np.median(h_plot[0]))
         if self.f_0 == 0 and self.beta == 0:
-            L_def = c * 60**2
+            L_def = c * 60 ** 2
         elif self.f_0 != 0:
             L_def = c / self.f_0
         elif self.beta != 0:
@@ -550,7 +639,7 @@ class ShallowWater:
 
         # scale velocity so you can see the arrows
         min_grid_space = min([self.dx / L_def, self.dy / L_def])
-        velocity_max = np.sqrt((u_plot**2 + v_plot**2).max())
+        velocity_max = np.sqrt((u_plot ** 2 + v_plot ** 2).max())
         velocity_scale = min_grid_space * interval / velocity_max  # so arrows show up
 
         # Contour plot
@@ -622,8 +711,48 @@ class ShallowWater:
                              blit=False, repeat_delay=200, fargs=(self,))
         return anim
 
-    @staticmethod
-    def el_nino_plot(t, h, X, Y, x_average_width, y_average_width):
+    def el_nino_seasonal_wind(self, t):
+        """
+        Return winds that oscillate with a period of 1 year about self.initial_info['wind']['initial_tau_over_h']
+        with magnitude of self.initial_info['wind']['seasonal_fluct'].
+        :param t: float.
+            current time.
+        """
+        t_year = 365 * 24 * 60 ** 2
+        return self.initial_info['wind']['initial_tau_over_h'] + \
+               self.initial_info['wind']['seasonal_fluct'] * np.sin(t * 2 * np.pi / t_year)
+
+    def get_average_east_west_boundary_thickness(self, h, x_average_width, y_average_width):
+        """
+        Finds the average fluid thickness at the east and west boundary.
+
+        :param h: numpy array [n_times x nx x ny] or [nx x ny].
+            Fluid depth field
+        :param x_average_width: float.
+            The average depth at the east and west boundary is computed by averaging between the boundary and
+            a distance x_average_width (m) away in the x direction.
+        :param y_average_width: float.
+            The average over y takes place over this distance (m) i.e. between +/- y_average_width/2 of y = 0.
+        :return:
+        """
+        x_east_avg_range = np.where(self.X[:, 0] >= self.X.max() - x_average_width)[0]
+        x_west_avg_range = np.where(self.X[:, 0] <= self.X.min() + x_average_width)[0]
+        y_avg_range = np.where(abs(self.Y[0]) <= y_average_width / 2)[0]
+        if len(np.shape(h)) == 2:
+            h_y_avg_range = h[:, y_avg_range]
+            h_east = h_y_avg_range[x_east_avg_range, :]
+            h_west = h_y_avg_range[x_west_avg_range, :]
+            h_east_average = h_east.mean()
+            h_west_average = h_west.mean()
+        else:
+            h_y_avg_range = h[:, :, y_avg_range]
+            h_east = h_y_avg_range[:, x_east_avg_range, :]
+            h_west = h_y_avg_range[:, x_west_avg_range, :]
+            h_east_average = np.mean(np.mean(h_east, 1), 1)
+            h_west_average = np.mean(np.mean(h_west, 1), 1)
+        return h_east_average, h_west_average
+
+    def el_nino_plot(self, t, h, x_average_width=None, y_average_width=None):
         """
         Plots the oscillation in thermocline depth at east and west boundary as a function of time.
 
@@ -631,38 +760,56 @@ class ShallowWater:
             array of times for which thermocline depth was calculated in simulation.
         :param h: numpy array [nt x nx x ny]
             h[i, :, :] is the thermocline depth field at time t[i].
-        :param X: numpy array [nx x ny]
-            x coordinate at each point on grid.
-        :param Y: numpy array [nx x ny]
-            y coordinate at each point on grid.
-        :param x_average_width: float.
+        :param x_average_width: float, optional.
             The average thermocline depth at the east and west boundary is plotted. The average over x
             takes place over this distance (m).
-        :param y_average_width: float.
+            default: use values set in self.initial_info['wind']
+        :param y_average_width: float, optional.
             The average over y takes place over this distance (m) i.e. between +/- y_average_width/2 of the
             equator.
+            default: use values set in self.initial_info['wind']
         """
-        x_east_avg_range = np.where(X[:, 0] >= X.max() - x_average_width)[0]
-        x_west_avg_range = np.where(X[:, 0] <= X.min() + x_average_width)[0]
-        y_avg_range = np.where(abs(Y[0]) <= y_average_width/2)[0]
-        h_y_avg_range = h[:, :, y_avg_range]
-        h_east = h_y_avg_range[:, x_east_avg_range, :]
-        h_west = h_y_avg_range[:, x_west_avg_range, :]
-        h_east_average = np.mean(np.mean(h_east, 1), 1)
-        h_west_average = np.mean(np.mean(h_west, 1), 1)
+        if x_average_width is None:
+            x_average_width = self.initial_info['wind']['x_average_width']
+        if y_average_width is None:
+            y_average_width = self.initial_info['wind']['y_average_width']
+        h_east_average, h_west_average = \
+            self.get_average_east_west_boundary_thickness(h, x_average_width, y_average_width)
 
         h_average = h[0, :, :].mean()  # average height, ensure this height is in the middle.
-        h_axis_range = max(abs(h_east_average-h_average).max(), abs(h_west_average-h_average).max())
-        h_axis_range = ceil(h_axis_range * 10) / 10 # round to 1 decimal place
-        t_days = t / 24 / 60**2
+        h_axis_range = max(abs(h_east_average - h_average).max(), abs(h_west_average - h_average).max())
+        h_axis_range = ceil(h_axis_range * 10) / 10  # round to 1 decimal place
+        t_days = t / 24 / 60 ** 2
 
-        fig, ax = plt.subplots(1, 1)
-        ax.plot(t_days, h_east_average, label=r'$\overline{h}_{east}$', color='b')
-        ax.plot(t_days, h_west_average, label=r'$\overline{h}_{west}$', color='r')
-        ax.set_ylim((h_average-h_axis_range, h_average+h_axis_range))
+        fig, ax = plt.subplots(1, 1, figsize=(12, 5))
+        ln1 = ax.plot(t_days, h_east_average, label=r'$\overline{h}_{east}$', color='b')
+        ln2 = ax.plot(t_days, h_west_average, label=r'$\overline{h}_{west}$', color='r')
+        ax.set_ylim((h_average - h_axis_range, h_average + h_axis_range))
         ax.set_xlim(0, ceil(t_days.max()))
         ax.set_ylabel('Thermocline Depth / m')
         ax.set_xlabel('Time / days')
-        ax.legend()
         plt.title('Oscillation in east and west boundary thermocline depth')
+
+        # Get wind plots
+        ax2 = ax.twinx()
+        feedback_wind = self.initial_info['wind']['gamma'] * (h_east_average - h_west_average)
+        # add 2*h_average so can share same axis as thermocline depth
+        if 'seasonal' in self.initial_info['wind']['type']:
+            seasonal_wind = self.el_nino_seasonal_wind(t)
+            total_wind = feedback_wind + seasonal_wind - self.initial_info['wind']['initial_tau_over_h']
+            ln3 = ax2.plot(t_days, seasonal_wind, color='g', linestyle='dashed', label='seasonal wind')
+            min_wind = min([total_wind.min(), seasonal_wind.min()])*1.02
+        else:
+            initial_wind = feedback_wind*0 + self.initial_info['wind']['initial_tau_over_h']
+            total_wind = feedback_wind
+            ln3 = ax2.plot(t_days, initial_wind, color='g', linestyle='dashed', label='Initial wind')
+            min_wind = total_wind.min() * 1.02
+        ln4 = ax2.plot(t_days, total_wind, color='k', linestyle='dashed', label='total wind')
+        ax2.set_ylabel(r'Wind: $\tau^x / h_{mean}$')
+        ax2.set_ylim((min_wind, -min_wind))
+
+        # added these three lines
+        lns = ln1 + ln2 + ln3 + ln4
+        labs = [l.get_label() for l in lns]
+        ax.legend(lns, labs, loc=0)
         return fig

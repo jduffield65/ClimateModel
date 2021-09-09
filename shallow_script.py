@@ -105,12 +105,15 @@ ny = int(round(15 * L_def / dy))
 courant_target = 0.01
 dt = courant_target * dx / c
 r = 1 / (16 * 30 * 24 * 60 ** 2)  # damping time scale of 16 months
-n_days = 25.0
+n_days = 500.0
 save_every = 24*60**2
-boundary_type = {'x': 'walls', 'y': 'walls'}
+y_walls_damp = {'dist_thresh': (ny/2)*dy-3*dy, 'r': r * 100}
+boundary_type = {'x': 'walls', 'y': 'walls', 'y_walls_damp': y_walls_damp}
 h_perturb = h_mean / 100
+linear = False
+wind_dict = {'type': 'seasonal'}
 initial_info = {'type': 'el_nino', 'max_h_surface': h_mean+h_perturb, 'min_h_surface': h_mean-h_perturb,
-                'y_std': L_def, 'add_noise': False}
+                'y_std': L_def, 'add_noise': False, 'wind': wind_dict}
 
 """Run simulation"""
 shallow_world = ShallowWater(nx, ny, dx, dy, dt, f_0, beta, initial_info=initial_info,
@@ -125,8 +128,7 @@ for n in tqdm(range(0, nt)):
     t, data_dict = shallow_world.time_step(t, data_dict, save_every=save_every)
 
 if initial_info['type'] == 'el_nino':
-    fig = ShallowWater.el_nino_plot(np.array(data_dict['t']), np.array(data_dict['h']), shallow_world.X, shallow_world.Y,
-                                    8*L_def, 8*L_def)
+    fig = shallow_world.el_nino_plot(np.array(data_dict['t']), np.array(data_dict['h']))
 anim = shallow_world.plot_animate(data_dict['t'], data_dict['h'], data_dict['u'], data_dict['v'],
                                   nPlotFrames=50, fract_frames_at_start=0)
 # anim.save('shallow.mp4', fps=30, extra_args=['-vcodec', 'libx264'])
