@@ -238,7 +238,7 @@ class ShallowWater:
             # Work out default values
             if self.initial_info['wind']['gamma'] is None:
                 # choose gamma automatically so wind can become eastward.
-                self.initial_info['wind']['gamma'] = 0.3 * abs(initial_tau_over_h_guess) / (
+                self.initial_info['wind']['gamma'] = 1.3 * abs(initial_tau_over_h_guess) / (
                         self.initial_info['max_h_surface'] - self.initial_info['min_h_surface'])
             if self.initial_info['wind']['x_average_width'] is None:
                 c = np.sqrt(self.g * h_surface_mean)
@@ -247,7 +247,7 @@ class ShallowWater:
             if self.initial_info['wind']['y_average_width'] is None:
                 c = np.sqrt(self.g * h_surface_mean)
                 L_def = np.sqrt(c / self.beta)
-                self.initial_info['wind']['y_average_width'] = 8 * L_def
+                self.initial_info['wind']['y_average_width'] = 5 * L_def
 
             # compute exact initial westward (negative) wind stress which keeps thermocline deeper in west.
             # Can get exact value as now we have 'gamma', 'x_average_width' and 'y_average_width'
@@ -260,8 +260,14 @@ class ShallowWater:
             self.initial_info['wind']['initial_tau_over_h'] = self.initial_info['wind']['gamma'] * (h_east - h_west)
 
             if self.initial_info['wind']['seasonal_fluct'] is None:
-                # set seasonal fluctuation to always keep winds westward.
-                self.initial_info['wind']['seasonal_fluct'] = abs(self.initial_info['wind']['initial_tau_over_h'])/2
+                if self.initial_info['wind']['type'] == 'seasonal':
+                    # set seasonal fluctuation to always keep winds westward.
+                    self.initial_info['wind']['seasonal_fluct'] = abs(
+                        self.initial_info['wind']['initial_tau_over_h'])
+                else:
+                    self.initial_info['wind']['seasonal_fluct'] = abs(
+                        self.initial_info['wind']['initial_tau_over_h']) / 10
+
 
             def atmosphere_wind(shallow_world, h, t):
                 """
@@ -324,7 +330,7 @@ class ShallowWater:
         max_u = np.sqrt((self.u ** 2 + self.v ** 2).max())
         # max_u = np.max([abs(self.u).max(), abs(self.v).max()])
         self.dt = min(self.dt_0, target_courant * min(self.dx, self.dy) / max_u)
-        if self.dt < 1e-20:
+        if self.dt < 10:
             raise ValueError("time step very small")
         numerical_args = list(self.numerical_args)
         numerical_args[3] = self.dt
@@ -359,8 +365,8 @@ class ShallowWater:
             wind_stress = self.initial_info['wind']['function'](self, h, t)
             u = u + wind_stress * self.dt
         self.h, self.u, self.v = self.boundary_conditions(h, u, v)
-        if self.h.min() < 0:
-            raise ValueError("surface height is less than floor height")
+        #if self.h.min() < 0:
+        #    raise ValueError("surface height is less than floor height")
         t = t + self.dt
         if np.divmod(t, save_every)[1] < self.dt:
             data_dict = self.save_data(data_dict, t)
@@ -798,15 +804,15 @@ class ShallowWater:
             seasonal_wind = self.el_nino_seasonal_wind(t)
             total_wind = feedback_wind + seasonal_wind - self.initial_info['wind']['initial_tau_over_h']
             ln3 = ax2.plot(t_days, seasonal_wind, color='g', linestyle='dashed', label='seasonal wind')
-            min_wind = min([total_wind.min(), seasonal_wind.min()])*1.02
+            max_wind = min([abs(total_wind).max(), abs(seasonal_wind).max()])*1.02
         else:
             initial_wind = feedback_wind*0 + self.initial_info['wind']['initial_tau_over_h']
             total_wind = feedback_wind
             ln3 = ax2.plot(t_days, initial_wind, color='g', linestyle='dashed', label='Initial wind')
-            min_wind = total_wind.min() * 1.02
+            max_wind = abs(total_wind).max() * 1.02
         ln4 = ax2.plot(t_days, total_wind, color='k', linestyle='dashed', label='total wind')
         ax2.set_ylabel(r'Wind: $\tau^x / h_{mean}$')
-        ax2.set_ylim((min_wind, -min_wind))
+        ax2.set_ylim((-max_wind, max_wind))
 
         # added these three lines
         lns = ln1 + ln2 + ln3 + ln4
