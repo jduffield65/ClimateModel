@@ -238,7 +238,7 @@ class ShallowWater:
             # Work out default values
             if self.initial_info['wind']['gamma'] is None:
                 # choose gamma automatically so wind can become eastward.
-                self.initial_info['wind']['gamma'] = 1.3 * abs(initial_tau_over_h_guess) / (
+                self.initial_info['wind']['gamma'] = 1.2 * abs(initial_tau_over_h_guess) / (  #1.3 default
                         self.initial_info['max_h_surface'] - self.initial_info['min_h_surface'])
             if self.initial_info['wind']['x_average_width'] is None:
                 c = np.sqrt(self.g * h_surface_mean)
@@ -300,7 +300,7 @@ class ShallowWater:
                         wind = wind_forced + shallow_world.el_nino_seasonal_wind(t) - \
                                self.initial_info['wind']['initial_tau_over_h']
                     elif shallow_world.initial_info['wind']['type'] == 'forced':
-                        wind = wind_forced #+ self.initial_info['wind']['intercept']
+                        wind = wind_forced
                     else:
                         raise ValueError("initial_info['wind']['type'] not valid")
                 return wind
@@ -561,6 +561,13 @@ class ShallowWater:
         """
         Q = np.zeros(np.subtract(np.shape(U), (0, 2, 2)))
         h, u, v = self.get_physical_values(U[:, 1:-1, 1:-1])
+
+        # Possibly the below form of u and v is better.
+        # h, u, v = self.get_physical_values(U)
+        # h = h[1:-1, 1:-1]
+        # u = 0.25 * (u[0:-2, 0:-2] + u[0:-2, 2:] + u[2:, 0:-2] + u[2:, 2:])
+        # v = 0.25 * (v[0:-2, 0:-2] + v[0:-2, 2:] + v[2:, 0:-2] + v[2:, 2:])
+
         Q[1] = self.f_coriolis[1:-1, 1:-1] * v - \
                self.g * numerical_methods.centered_diff_x(self.h_base, self.dx)
         Q[2] = -self.f_coriolis[1:-1, 1:-1] * u - \
@@ -804,7 +811,7 @@ class ShallowWater:
             seasonal_wind = self.el_nino_seasonal_wind(t)
             total_wind = feedback_wind + seasonal_wind - self.initial_info['wind']['initial_tau_over_h']
             ln3 = ax2.plot(t_days, seasonal_wind, color='g', linestyle='dashed', label='seasonal wind')
-            max_wind = min([abs(total_wind).max(), abs(seasonal_wind).max()])*1.02
+            max_wind = max([abs(total_wind).max(), abs(seasonal_wind).max()])*1.02
         else:
             initial_wind = feedback_wind*0 + self.initial_info['wind']['initial_tau_over_h']
             total_wind = feedback_wind
