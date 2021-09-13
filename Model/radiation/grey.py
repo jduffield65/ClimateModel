@@ -48,7 +48,7 @@ class GreyGas:
             If give single value, will repeat this value at each latitude.
             default: 0.3 at each latitude.
         """
-        self.ny = ny  # only one dimension for the moment
+        self.ny = ny
         self.nz = nz
         if np.size(albedo) < self.ny and np.size(albedo) == 1:
             self.albedo = np.repeat(albedo, self.ny)
