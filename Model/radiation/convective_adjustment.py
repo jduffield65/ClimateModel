@@ -40,7 +40,7 @@ def convective_adjustment_single(p, T, lapserate=g/c_p_dry):
     """
     p_reference = p_surface
     alpha = R_specific * lapserate / g
-    theta = T / (p/p_reference)**alpha
+    theta = get_theta(T, p, p_reference, alpha)
     theta_diff = np.ediff1d(theta)
     theta_diff = np.concatenate((theta_diff, [theta_diff[-1]]))
     small = 1e-10  # so don't repeat with tiny increase
