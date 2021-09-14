@@ -8,3 +8,4 @@ p_toa = 20  # top of atmosphere is 20 Pa
 F_sun = get_constant('solar_constant', 'W/m^2')
 Omega = get_constant('planetary_rotation_rate', 's^-1')
 R_earth = get_constant('planetary_radius', 'm')
+R_specific = get_constant('gas_constant_of_dry_air', 'J/kg/K')

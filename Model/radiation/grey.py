@@ -1,4 +1,5 @@
 from ..constants import g, c_p_dry, sigma, p_surface, p_toa, F_sun
+from .convective_adjustment import convective_adjustment
 import numpy as np
 from numba import jit
 from sympy import symbols, lambdify, diff, exp, simplify, sympify, integrate, cancel, Function
@@ -221,7 +222,7 @@ class GreyGas:
             delta_latitude = (np.radians(latitude[1]) - np.radians(latitude[0]))
             lat_dist = 1 - 0.5 * c * (3 * np.sin(np.radians(latitude)) ** 2 - 1)
             # normalise so integral of 0.5 * lat_dist x cos(latitude) = 1.
-            norm_factor = sum(0.5 * lat_dist * np.cos(np.radians(latitude)) * delta_latitude)
+            norm_factor = np.trapz(0.5 * lat_dist * np.cos(np.radians(latitude)), np.radians(latitude))
             lat_dist = lat_dist / norm_factor  # ensure normalised so sum is 1.
         else:
             lat_dist = 1
@@ -274,7 +275,8 @@ class GreyGas:
             down_sw_flux = down_sw_flux * np.exp(-self.tau_sw_interface)
         return up_sw_flux, down_sw_flux
 
-    def update_temp(self, t, T_initial=None, changing_tau=False, net_flux_thresh=1e-7, net_flux_percentile=95):
+    def update_temp(self, t, T_initial=None, changing_tau=False, convective_adjust=False,
+                    net_flux_thresh=1e-7, net_flux_percentile=95):
         """
         This finds the fluxes given the current temperature profile. It then finds a suitable time step through
         the function update_time_step. It will then update the temperature profile accordingly.
@@ -288,6 +290,9 @@ class GreyGas:
         :param changing_tau: boolean, optional.
             Whether the optical depth is changing with time. If it is not, algorithm will adjust to try to reach
             equilibrium.
+            default: False
+        :param convective_adjust: boolean, optional.
+            Whether the temperature profile should adjust to stay stable with respect to convection.
             default: False
         :param net_flux_thresh: float, optional.
             Only update temperature at pressure levels where change in net flux between time steps
@@ -330,6 +335,8 @@ class GreyGas:
         self.net_flux = net_flux
         update_ind = np.unravel_index(levels_to_update, self.T.shape)  # from 1d to 2d
         self.T[update_ind] = self.T[update_ind] + self.time_step_info['dt'] * T_tendency[update_ind]
+        if convective_adjust:
+            self.T = convective_adjustment(self.p[:, 0], self.T)
         t = t + self.time_step_info['dt']
         return t, delta_net_flux
 
@@ -454,7 +461,7 @@ class GreyGas:
             data_dict['flux']['sw_down'].append(self.down_sw_flux.copy())
         return data_dict
 
-    def evolve_to_equilibrium(self, data_dict=None, flux_thresh=1e-3, T_initial=None):
+    def evolve_to_equilibrium(self, data_dict=None, flux_thresh=1e-3, T_initial=None, convective_adjust=False):
         """
         This updates the temperature profile until the equilibrium condition is reached.
 
@@ -470,17 +477,21 @@ class GreyGas:
         :param T_initial: numpy array, optional.
             Temperature profile at t=0. If not provided, will use self.T
             default: None
+        :param convective_adjust: boolean, optional.
+            Whether the temperature profile should adjust to stay stable with respect to convection.
+            default: False
         :return:
             data_dict
         """
         if data_dict is None:
             if T_initial is None:
                 T_initial = self.T.copy()
-            data_dict = {'t': [0], 'T': [T_initial]}
+            data_dict = {'t': [0], 'T': [T_initial.copy()]}
         t = data_dict['t'][-1]
         equilibrium = False
         while not equilibrium:
-            t, delta_net_flux = self.update_temp(t, T_initial, changing_tau=False)
+            t, delta_net_flux = self.update_temp(t, T_initial, changing_tau=False,
+                                                 convective_adjust=convective_adjust)
             data_dict = self.save_data(data_dict, t)
             equilibrium = self.check_equilibrium(delta_net_flux, flux_thresh)
             if min(self.T.flatten()) < 0:
@@ -489,7 +500,7 @@ class GreyGas:
         self.time_step_info['RemoveInd'] = []
         return data_dict
 
-    def equilibrium_sol(self):
+    def equilibrium_sol(self, convective_adjust=False):
         """
         Calculates the analytic equilibrium solution given the current optical depth grids.
         If short wave optical depth is non zero, an analytic solution can only be computed if both functions are
@@ -497,6 +508,10 @@ class GreyGas:
         If cannot compute an analytic equilibrium solution, the equilibrium solution in the absence of any
         short wave optical depth is returned.
         correct_solution will be False if the short wave optical depth had to be set to zero.
+
+        :param convective_adjust: boolean, optional.
+            Whether the temperature profile should adjust to stay stable with respect to convection.
+            default: False
 
         :return:
         up_lw_flux_eqb
@@ -549,6 +564,8 @@ class GreyGas:
             T_eqb = np.power((self.F_sw0 / (2 * sigma)) * (1 + self.tau), 1 / 4)
             up_sw_flux_eqb = np.ones(np.shape(up_lw_flux_eqb)) * self.albedo * self.F_stellar_constant / 4
             down_sw_flux_eqb = np.ones(np.shape(up_lw_flux_eqb)) * self.F_stellar_constant / 4
+        if convective_adjust:
+            T_eqb = convective_adjustment(self.p[:, 0], T_eqb)
         return up_lw_flux_eqb, down_lw_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, correct_solution
 
     def plot_eqb(self, up_lw_flux_eqb, down_lw_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb):

@@ -9,7 +9,8 @@ from Model.constants import p_surface
 
 matplotlib.use('TkAgg')  # To make plot pop out
 
-ny = 30
+ny = 1
+conv_adjust = True
 '''Analytic solution with short wave'''
 # p_width_lw = 100000
 # # alpha ratio must be integer for analytic solution
@@ -27,21 +28,21 @@ ny = 30
 #                                           tau_lw_func_args=[50000, 4, 1000, 600, 0.3], tau_sw_func=OpticalDepthFunctions.peak_in_atmosphere,
 #                                           tau_sw_func_args=[10000, 2000, 0.05])
 '''With thermosphere'''
-grey_world = Model.radiation.grey.GreyGas(nz='auto', ny=ny, tau_lw_func=OpticalDepthFunctions.scale_height_and_peak_in_atmosphere,
-                                          tau_lw_func_args=[51000, 4, 100, 600, 0.1], tau_sw_func=OpticalDepthFunctions.scale_height_and_peak_in_atmosphere,
-                                          tau_sw_func_args=[p_surface, 0.12, 100, 20, 0.002])
+# grey_world = Model.radiation.grey.GreyGas(nz='auto', ny=ny, tau_lw_func=OpticalDepthFunctions.scale_height_and_peak_in_atmosphere,
+#                                           tau_lw_func_args=[51000, 4, 100, 600, 0.1], tau_sw_func=OpticalDepthFunctions.scale_height_and_peak_in_atmosphere,
+#                                           tau_sw_func_args=[p_surface, 0.12, 100, 20, 0.002])
 
 """ Approach to equilibrium"""
 # if grey_world.ny == 1:
 #     up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, \
-#         correct_solution = grey_world.equilibrium_sol()
+#         correct_solution = grey_world.equilibrium_sol(convective_adjust=conv_adjust)
 #     if correct_solution:
 #         grey_world.plot_eqb(up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb)
 # #plt.show()
 # t = 0
 # # Get temperature results until net_flux is zero everywhere i.e. equilibrium
 # net_flux_thresh = 1e-1
-# data = grey_world.evolve_to_equilibrium(flux_thresh=net_flux_thresh)
+# data = grey_world.evolve_to_equilibrium(flux_thresh=net_flux_thresh, convective_adjust=conv_adjust)
 # if grey_world.ny == 1:
 #     anim = grey_world.plot_animate(data['T'], data['t'], T_eqb, correct_solution)
 # else:
@@ -64,7 +65,7 @@ grey_world.tau_lw_func_args = tuple(tau_params)
 grey_world.tau_sw_func_args = tuple(tau_sw_params)
 grey_world.update_grid()
 up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, \
-correct_solution = grey_world.equilibrium_sol()
+correct_solution = grey_world.equilibrium_sol(convective_adjust=conv_adjust)
 t = 0
 t_end = 10 * 365 * 24 * 60 ** 2
 t_sw = t_end
@@ -83,7 +84,8 @@ while t < t_end:
     if tau_params[1] == tau_params_final[1] and tau_sw_params[2] != tau_sw_params_final[2]:
         if t_sw == t_end:
             # once lw optical depth reached max value, get to equilibrium
-            data = grey_world.evolve_to_equilibrium(data, delta_net_flux_thresh, T_eqb.copy())
+            data = grey_world.evolve_to_equilibrium(data, delta_net_flux_thresh, T_eqb.copy(),
+                                                    convective_adjust=conv_adjust)
             t = data['t'][-1]
             t_sw = t
         # After equilibrium evolve sw optical depth
@@ -92,15 +94,17 @@ while t < t_end:
         grey_world.tau_sw_func_args = tuple(tau_sw_params)
     if tau_sw_params[2] == tau_sw_params_final[2]:
         # once sw optical depth reached max value, get to equilibrium
-        data = grey_world.evolve_to_equilibrium(data, delta_net_flux_thresh, T_eqb.copy())
+        data = grey_world.evolve_to_equilibrium(data, delta_net_flux_thresh, T_eqb.copy(),
+                                                convective_adjust=conv_adjust)
         # set sw optical depth to zero and then see how it evolves from there
         tau_sw_params[2] = 0
         grey_world.tau_sw_func_args = tuple(tau_sw_params)
         grey_world.update_grid()
-        data = grey_world.evolve_to_equilibrium(data, delta_net_flux_thresh, T_eqb.copy())
+        data = grey_world.evolve_to_equilibrium(data, delta_net_flux_thresh, T_eqb.copy(),
+                                                convective_adjust=conv_adjust)
         t = t_end + 10 # once reached final equilibrium, end simulation
     else:
-        t = grey_world.update_temp(t, T_eqb.copy(), changing_tau)[0]
+        t = grey_world.update_temp(t, T_eqb.copy(), changing_tau, convective_adjust=conv_adjust)[0]
         data = grey_world.save_data(data, t)
 anim = grey_world.plot_animate(data['T'], data['t'], T_eqb, correct_solution, data['tau'], data['flux'], nPlotFrames=30)
 plt.show()
