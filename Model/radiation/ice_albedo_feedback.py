@@ -89,9 +89,9 @@ class GreyAlbedoFeedback:
         if self.changing_param == 'tau':
             self.changing_param_values = np.concatenate((np.sort(tau_lw_surface_values)[::-1],
                                                          np.sort(tau_lw_surface_values)[1:]))
-            tau_lw_func_args[1] = self.changing_param_values[0]
             F_stellar_constant = stellar_constant_values
-            self.tau_args = tau_lw_func_args
+            self.tau_args = tau_lw_func_args.copy()
+            self.tau_args[1] = self.changing_param_values[0]
         elif self.changing_param == 'stellar':
             self.changing_param_values = np.concatenate((np.sort(stellar_constant_values)[::-1],
                                                          np.sort(stellar_constant_values)[1:]))
@@ -130,8 +130,8 @@ class GreyAlbedoFeedback:
             Whether the temperature profile should adjust to stay stable with respect to convection.
             default: False
         """
+        # Find temperature profile using last albedo values.
         albedo_last = self.grey_world.albedo.copy()
-        self.grey_world.albedo_function = None
         _ = self.grey_world.evolve_to_equilibrium(flux_thresh=delta_net_flux_thresh,
                                                   convective_adjust=conv_adjust)
         # Find new albedo values with current temperature profile
@@ -203,8 +203,11 @@ class GreyAlbedoFeedback:
                     label='warming')
         axs[0].legend()
         axs[0].set_ylabel('Ice edge latitude')
+        axs[0].set_ylim((-5, 95))
         axs[1].plot(self.changing_param_values[cooling_indices], T_surface_plot[cooling_indices], color=cooling_color)
         axs[1].plot(self.changing_param_values[warming_indices], T_surface_plot[warming_indices], color=warming_color)
+        axs[1].axhline(y=self.T_ice, color='k', linestyle=':', label=r'$T_{ice}$')
+        axs[1].legend()
         axs[1].set_ylabel('$T_{surface}$ (K) at ' + str(round(T_latitude)) + '$^{\circ}$ latitude')
         if self.changing_param == 'tau':
             axs[1].set_xlabel(r'Long Wave Surface Optical Depth, $\tau_{lw, surface}$')

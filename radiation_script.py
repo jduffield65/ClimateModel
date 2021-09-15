@@ -5,7 +5,6 @@ import numpy as np
 from Model.constants import p_surface, F_sun
 from matplotlib.animation import FuncAnimation
 import Model.radiation.grey_optical_depth as od
-from Model.constants import p_surface
 from Model.radiation.ice_albedo_feedback import GreyAlbedoFeedback
 
 matplotlib.use('TkAgg')  # To make plot pop out
