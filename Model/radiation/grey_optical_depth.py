@@ -1,8 +1,24 @@
 """ All optical depth functions return:
-1 - mass concentration distribution, q
+1 - specific humidity, q (density of substance / density of air)
 2 - optical depth, tau
 3 - sympy_function as function of pressure
 4 - sympy_function arguments excluding pressure"""
+"""
+Getting specific humidity, q, from optical depth, tau:
+k is absorption coefficient of gas component in m^2/kg
+rho_air is the density of air in kg/m^3
+g is the gravitational acceleration, m/s^2
+p is pressure
+z is altitude
+
+dtau = -k x q x rho_air x dz  
+(from just above equation 14 in grey_radiation.ipynb
+Minus sign appears because this is after saying tau = tau_inf - tau)
+dp = -g x rho_air x dz
+dtau = k x q x dp / g
+q = dtau/dp x (g/k)
+"""
+
 import numpy as np
 from ..constants import p_surface, g
 from sympy import symbols, lambdify, diff, exp, simplify, sympify, integrate, cancel, Function
@@ -42,7 +58,7 @@ def scale_height(p, p_width=0.22 * p_surface, tau_surface=4, k=1):
         The value of optical depth at the surface.
         default: 4
     :param k: float, optional.
-        Absorption coefficient for gas.
+        Absorption coefficient for gas, units = m^2/kg
         default: 1
     """
     alpha = get_scale_height_alpha(p_width)
@@ -104,7 +120,7 @@ def exponential(p, p_width=0.22 * p_surface, tau_surface=4, k=1):
         The value of optical depth at the surface.
         default: 4
     :param k: float, optional.
-        Absorption coefficient for gas.
+        Absorption coefficient for gas, units = m^2/kg
         default: 1
     """
     alpha = get_exponential_alpha(p_width)
@@ -139,7 +155,7 @@ def peak_in_atmosphere(p, p_width=10000, p_max=50000, tau_surface=4, k=1):
         The value of optical depth at the surface.
         default: 4
     :param k: float, optional.
-        Absorption coefficient for gas.
+        Absorption coefficient for gas, units = m^2/kg
         default: 1
     """
     alpha = get_exponential_alpha(p_width, p_max)
@@ -209,7 +225,7 @@ def scale_height_and_peak_in_atmosphere(p, p_width1=0.7788 * p_surface, tau_surf
         The value of optical depth at the surface due to peak_in_atmosphere.
         default: 4
     :param k: float, optional.
-        Absorption coefficient for gas.
+        Absorption coefficient for gas, units = m^2/kg
         default: 1
     """
     alpha1 = get_scale_height_alpha(p_width1)
