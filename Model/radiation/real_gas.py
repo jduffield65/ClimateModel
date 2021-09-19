@@ -6,7 +6,7 @@ import numpy as np
 from math import ceil, floor
 import matplotlib.pyplot as plt
 from scipy.signal import argrelextrema
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, InterpolatedUnivariateSpline
 
 
 def B_freq(freq, T):
@@ -64,7 +64,7 @@ def get_absorption_coef(p, T, nu, absorb_coef_dict):
     return absorb_coef_all_nu[:, nu_dict_ind]
 
 
-def optical_depth(p, T, wavenumber, molecule_names, q_funcs=None):
+def optical_depth(p, T, wavenumber, molecule_names, q_funcs):
     """
     Performs integral of dtau/dp = kq/g over pressure to give optical depth at each pressure level.
 
@@ -75,9 +75,8 @@ def optical_depth(p, T, wavenumber, molecule_names, q_funcs=None):
         T[i] is the temperature at pressure level p[i].
     :param wavenumber: numpy array [n_wavenumber]
     :param molecule_names: list [n_molecules]
-    :param q_funcs: dictionary of functions, optional.
+    :param q_funcs: dictionary of functions.
         q[molecule_name](p) returns the specific humidity of molecule_name at pressure p.
-        default: None, meaning Earth values used.
     :return:
         tau: numpy array [np x n_wavenumber]
         tau[-1, :] is surface value
@@ -93,10 +92,7 @@ def optical_depth(p, T, wavenumber, molecule_names, q_funcs=None):
                                                         wavenumber <= absorb_coef_dict['nu'].max()))[0]
         wavenumber_crop = wavenumber[update_wavenumber_ind]
         absorb_coef[:, update_wavenumber_ind] = get_absorption_coef(p, T, wavenumber_crop, absorb_coef_dict)
-        if q_funcs is None:
-            q = molecules[molecule_name]['humidity'](p)
-        else:
-            q = q_funcs[molecule_name](p)
+        q = q_funcs[molecule_name](p)
         tau_integrand += absorb_coef * q.reshape(-1, 1)
     tau = np.zeros_like(tau_integrand)
     tau_integrand = tau_integrand / g
@@ -106,6 +102,29 @@ def optical_depth(p, T, wavenumber, molecule_names, q_funcs=None):
     for i in range(len(p)):
         tau[i, :] = np.trapz(tau_integrand[:i+2], p_integral[:i+2], axis=0)
     return tau
+
+def transmission(p1, p2, p_all, nu_band, delta_nu_band, nu_all, tau):
+    """
+
+    :param p1: numpy array [np1]
+    :param p2: numpy array [np2]
+    :param p_all: numpy array [np]
+    :param nu_band: numpy array [n_band]
+    :param delta_nu_band: float
+    :param nu_all: numpy array [n_nu]
+    :param tau: numpy array [np x n_nu]
+    :return: numpy array [np1 x np2]
+    """
+    p1_ind = np.where(p_all.reshape(-1, 1) == p1)[0]
+    p2_ind = np.where(p_all.reshape(-1, 1) == p2)[0]
+    nu_ind = np.where(nu_all.reshape(-1, 1) == nu_band)[0]
+    tau = tau[:, nu_ind]
+    tau_p1 = np.expand_dims(tau[p1_ind, :], axis=1)
+    tau_p1 = np.repeat(tau_p1, len(p2), axis=1)
+    tau_p2 = np.expand_dims(tau[p2_ind, :], axis=0)
+    tau_p2 = np.repeat(tau_p2, len(p1), axis=0)
+    integrand = np.exp(tau_p1) - np.exp(tau_p2)
+    return np.trapz(integrand, nu_band, axis=2) / delta_nu_band
 
 
 class RealGas(GreyGas):
@@ -126,13 +145,18 @@ class RealGas(GreyGas):
         self.n_nu_bands = 20
         self.nu, self.nu_lw, self.nu_overlap, self.nu_sw = self.get_wavenumber_array()
         self.bands_lw, self.bands_overlap, self.bands_sw = self.get_wavenumber_bands()
-        self.p_interface = self.get_p_grid()
+        self.n_bands = len(self.bands_lw['range']) + len(self.bands_sw['range'])
+        self.p_interface = np.sort(self.get_p_grid(), axis=0) # ascending
         self.p = np.zeros((self.nz - 1, self.ny))  # at same height as temperature
         for i in range(self.nz - 1):
             self.p[i, :] = np.mean(self.p_interface[i:i + 2, :], 0)
         self.T0 = get_isothermal_temp(albedo=self.albedo, T_star=self.star['T'],
                                       R_star=self.star['R'], star_planet_dist=self.star['star_planet_dist'])
         self.T = np.ones_like(self.p) * self.T0
+        self.tau_interface = optical_depth(self.p_interface[:, 0], np.ones_like(self.p_interface[:, 0]) * self.T0,
+                                           self.nu, self.molecule_names, self.q_funcs)
+        a = transmission(self.p_interface[:1, 0], self.p_interface[:, 0], self.p_interface,
+                         self.bands_lw['range'][5], self.bands_lw['delta'][5], self.nu, self.tau_interface)
 
     def get_wavenumber_array(self, fract_to_ignore=0.001, fract_to_ignore_overlap=0.001):
         nu_initial = np.arange(10.0, 100000.0 + self.d_nu, self.d_nu)
@@ -341,3 +365,10 @@ class RealGas(GreyGas):
 
         p_interface = np.tile(p_interface, (self.ny, 1)).transpose()  # nz x ny
         return p_interface
+
+    def get_flux(self):
+        # need T at interface for integrals
+        T_interp_func = InterpolatedUnivariateSpline(self.p, self.T)
+        T_interface = T_interp_func(self.p_interface)
+        T_interface[-1] = self.T_g # ground temperature at highest pressure interface
+        flux = np.zeros((self.nz,5) )
