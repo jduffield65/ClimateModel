@@ -2,11 +2,13 @@ from .real_gas_data.hitran import LookupTableFolder
 from ..constants import h_planck, speed_of_light, k_boltzmann, g, T_sun, R_sun, AU, p_surface, p_toa, sigma
 from .real_gas_data.specific_humidity import molecules
 from .grey import GreyGas
+from .base import grid_points_near_local_maxima, amend_sparse_pressure_grid, Atmosphere
 import numpy as np
 from math import ceil, floor
 import matplotlib.pyplot as plt
 from scipy.signal import argrelextrema
 from scipy.interpolate import interp1d, InterpolatedUnivariateSpline
+from scipy import optimize
 
 
 def B_freq(freq, T):
@@ -40,12 +42,6 @@ def B_wavenumber(nu, T):
     return dfreq_dwavenumber * B_freq(freq, T)
 
 
-def get_isothermal_temp(albedo, F_stellar=None, T_star=None, R_star=None, star_planet_dist=None):
-    if F_stellar is None:
-        F_stellar = sigma * T_star ** 4 * R_star ** 2 / star_planet_dist ** 2
-    return np.power(F_stellar / sigma * (1 - albedo) / 4, 1 / 4)
-
-
 def get_absorption_coef(p, T, nu, absorb_coef_dict):
     """
 
@@ -64,7 +60,7 @@ def get_absorption_coef(p, T, nu, absorb_coef_dict):
     return absorb_coef_all_nu[:, nu_dict_ind]
 
 
-def optical_depth(p, T, wavenumber, molecule_names, q_funcs):
+def optical_depth(p, T, wavenumber, molecule_names, q_funcs, q_funcs_args):
     """
     Performs integral of dtau/dp = kq/g over pressure to give optical depth at each pressure level.
 
@@ -76,7 +72,10 @@ def optical_depth(p, T, wavenumber, molecule_names, q_funcs):
     :param wavenumber: numpy array [n_wavenumber]
     :param molecule_names: list [n_molecules]
     :param q_funcs: dictionary of functions.
-        q[molecule_name](p) returns the specific humidity of molecule_name at pressure p.
+        q_funcs[molecule_name](p, *q_funcs_args[molecule_name])
+        returns the specific humidity of molecule_name at pressure p.
+    :param q_funcs_args: dictionary of tuples
+        q_funcs_args[molecule_name] is arguments to pass to q function as well as pressure.
     :return:
         tau: numpy array [np x n_wavenumber]
         tau[-1, :] is surface value
@@ -92,7 +91,7 @@ def optical_depth(p, T, wavenumber, molecule_names, q_funcs):
                                                         wavenumber <= absorb_coef_dict['nu'].max()))[0]
         wavenumber_crop = wavenumber[update_wavenumber_ind]
         absorb_coef[:, update_wavenumber_ind] = get_absorption_coef(p, T, wavenumber_crop, absorb_coef_dict)
-        q = q_funcs[molecule_name](p)
+        q = q_funcs[molecule_name](p, *q_funcs_args[molecule_name])
         tau_integrand += absorb_coef * q.reshape(-1, 1)
     tau = np.zeros_like(tau_integrand)
     tau_integrand = tau_integrand / g
@@ -130,23 +129,31 @@ def transmission(p1, p2, p_all, nu_band, delta_nu_band, nu_all, tau):
     return np.trapz(integrand, nu_band, axis=2) / delta_nu_band
 
 
-class RealGas(GreyGas):
-    def __init__(self, nz, ny, molecule_names, T_g, q_funcs=None,
-                 d_nu=10, n_nu_bands=40, T_star=T_sun, R_star=R_sun, star_planet_dist=AU, albedo=0.3):
-        self.nz = nz
-        self.ny = ny
+class RealGas(Atmosphere):
+    def __init__(self, nz, ny, molecule_names, T_g=None, q_funcs=None, q_funcs_args=None, n_nu_bands=40,
+                 T_star=T_sun, R_star=R_sun, star_planet_dist=AU, albedo=0.3, temp_change=1):
+
+        self.star = {'T': T_star, 'R': R_star, 'star_planet_dist': star_planet_dist}
+        F_stellar_constant = sigma * self.star['T'] ** 4 * self.star['R'] ** 2 / \
+                             self.star['star_planet_dist'] ** 2
+        super().__init__(nz, ny, F_stellar_constant, albedo, temp_change)
+        if T_g is None:
+            self.T_g = self.T0 + 20  # assume some greenhouse warming
+        else:
+            self.T_g = T_g
         self.molecule_names = molecule_names
         if q_funcs is None:
             q_funcs = {}
+            q_funcs_args = {}
             for molecule_name in molecule_names:
-                q_funcs[molecule_name] = molecules[molecule_name]['humidity']
+                q_funcs[molecule_name] = molecules[molecule_name]['q']
+                q_funcs_args[molecule_name] = molecules[molecule_name]['q_args']
         self.q_funcs = q_funcs
-        self.T_g = T_g
-        self.albedo = albedo
-        self.star = {'T': T_star, 'R': R_star, 'star_planet_dist': star_planet_dist}
-        self.F_stellar_constant = sigma * self.star['T'] ** 4 * self.star['R'] ** 2 / \
-                                  self.star['star_planet_dist'] ** 2
-        self.d_nu = d_nu
+        self.q_funcs_args = q_funcs_args
+        # get wavenumber spacing from absorption coefficient data. Assume same for all molecules
+        absorb_coef_nu = np.load(LookupTableFolder + molecule_names[0] + '.npy',
+                                 allow_pickle='TRUE').item()['nu']
+        self.d_nu = absorb_coef_nu[1] - absorb_coef_nu[0]
         self.n_nu_bands = n_nu_bands
         self.nu, self.nu_lw, nu_overlap, self.nu_sw = self.get_wavenumber_array()
         self.nu_bands = self.get_wavenumber_bands(nu_overlap)
@@ -154,11 +161,14 @@ class RealGas(GreyGas):
         self.p = np.zeros((self.nz - 1, self.ny))  # at same height as temperature
         for i in range(self.nz - 1):
             self.p[i, :] = np.mean(self.p_interface[i:i + 2, :], 0)
-        self.T0 = get_isothermal_temp(albedo=self.albedo, F_stellar=self.F_stellar_constant)
         self.T = np.ones_like(self.p) * self.T0
         self.tau_interface = optical_depth(self.p_interface[:, 0], np.ones_like(self.p_interface[:, 0]) * self.T0,
-                                           self.nu, self.molecule_names, self.q_funcs)
-        up_flux = self.get_flux()
+                                           self.nu, self.molecule_names, self.q_funcs, self.q_funcs_args)
+        self.up_flux, self.down_flux = self.get_flux()
+        self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
+                        np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
+        if T_g is None:
+            self.T_g = self.inital_Tg_guess()
 
     def get_wavenumber_array(self, fract_to_ignore=0.001, fract_to_ignore_overlap=0.001):
         nu_initial = np.arange(10.0, 100000.0 + self.d_nu, self.d_nu)
@@ -247,32 +257,28 @@ class RealGas(GreyGas):
         """
         return bands
 
-    def get_p_grid(self, nz_multiplier_param=100, q_thresh_info_percentile=75,
-                   q_thresh_info_max=10, log_p_min_sep=0.1, min_absorb_coef_use=10e-6):
+    def get_p_grid(self, min_absorb_coef_use=10e-6, min_log_p_spacing_factor=5000, max_log_p_spacing_factor=50,
+                   max_max_log_p_spacing=0.2):
         """
         Get pressure and optical depth grids together so have good separation in both.
 
-        :param nz_multiplier_param: float, optional.
-            Each local maxima in mass concentration, q_max, will have nz_multiplier_param*q_max grid points
-            associated with it if nz is 'auto'.
-            default: 100
-        :param q_thresh_info_percentile: float, optional.
-            grid around local maxima, q_max runs until q falls to q_max/q_thresh_info_max or to the
-            q_thresh_info_percentile of all q.
-            default: 75
-        :param q_thresh_info_max: float, optional.
-            default: 1000
-        :param log_p_min_sep: float, optional.
-            Try to have a minimum log10 pressure separation of log_p_min_sep in grid.
-            default: 0.1
-        :param tau_min_sep: float, optional.
-            Require a separation in lw optical depth of more than tau_min_sep between pressure levels.
-            default: 1e-3
+        :param min_absorb_coef_use: float, optional
+            used to get absorption coef summed over all significant nu. significant nu where absorbption
+            coefficient greater than this.
+            default: 10^-6
+        :param min_log_p_spacing_factor: float, optional
+            The minimum spacing of log pressure is -log(q_max)/min_log_p_spacing_factor
+            default: 5000
+        :param max_log_p_spacing_factor: float, optional
+            The maximum spacing of log pressure is -log(q_min)/max_log_p_spacing_factor
+            default: 50
+        :param max_max_log_p_spacing: float, optional
+            any spacing of log pressure cannot exceed this.
+            default: 0.2
+
         :return:
         p_interface: numpy array.
             Pressure grid levels for flux calc.
-        tau_interface: numpy array.
-            Corresponding long wave optical depth
         """
         '''Get base pressure grid in log space'''
         if self.nz == 'auto':
@@ -284,96 +290,105 @@ class RealGas(GreyGas):
 
         '''Get mass concentrations x absorption coef (i.e. dtau/dp) so ensure have grid points around local maxima'''
         q = np.zeros_like(p_interface)
-        small = 1e-10
-        q_local_maxima_index = []
         for molecule_name in self.molecule_names:
             absorb_coef_dict = np.load(LookupTableFolder + molecule_name + '.npy',
                                        allow_pickle='TRUE').item()
             absorb_coef_all_nu = get_absorption_coef(absorb_coef_dict['p'], np.ones_like(absorb_coef_dict['p']) *
                                                      self.T_g, absorb_coef_dict['nu'], absorb_coef_dict)
-            # get absorption coef summed over all significant freq. Each freq contributes same as divide by max
+            # get absorption coef summed over all significant freq.
+            # just use absorb_coef to modify q relative to max pressure value
             use_nu = np.max(absorb_coef_all_nu, axis=0) > min_absorb_coef_use
-            absorb_coef = np.sum(absorb_coef_all_nu[:, use_nu] / np.max(absorb_coef_all_nu[:, use_nu], axis=0), axis=1)
+            absorb_coef = np.mean(absorb_coef_all_nu[:, use_nu], axis=1)
+            absorb_coef = absorb_coef / np.max(absorb_coef)
             coef_interp = interp1d(absorb_coef_dict['p'], absorb_coef)
             absorb_coef = coef_interp(p_interface)
             # to ensure find local maxima if at surface, add value one index away from surface below surface too.
             # subtract small amount to correct for case where value at surface = value one away from surface
-            q_molecule = self.q_funcs[molecule_name](p_interface)
-            q_molecule = q_molecule / max(q_molecule) * absorb_coef / max(absorb_coef)
-            q_molecule_local_maxima_index = argrelextrema(np.insert(q_molecule, 0, q_molecule[1] - small),
-                                                          np.greater)[0] - 1
-            q_local_maxima_index.append(q_molecule_local_maxima_index[q_molecule_local_maxima_index >= 0])
-            q = q + q_molecule
-        q = q / len(self.molecule_names)
-        cum_q = np.cumsum(q)
-        q_local_maxima_index = np.sort(np.concatenate(tuple(q_local_maxima_index)))
-        '''Determine number of grid points around each local maxima'''
-        last_above_ind = 0  # use max (new_below_ind, above_ind) so local maxima sections don't overlap
-        nLocalMaxima = len(q_local_maxima_index)
-        q_max_values = q[q_local_maxima_index]
-        if self.nz == 'auto':
-            nz_multiplier = max(
-                [nz_multiplier_param, max(5 / q_max_values)])  # have at least 5 grid points for each local maxima
-            nPointsPerSet = np.ceil(q_max_values * nz_multiplier).astype(int)
-            self.nz = sum(nPointsPerSet)
-        else:
-            nz_multiplier = None
-            nPointsPerSet = np.floor(q_max_values / sum(q_max_values) * self.nz).astype(int)
-            nPointsPerSet[-1] = self.nz - sum(nPointsPerSet[:-1])
-        p_array_indices = []
-        for i in range(nLocalMaxima):
-            if nPointsPerSet[i] > 0:
-                # Determine where q falls significantly below local maxima.
-                q_thresh = np.min([np.percentile(q, q_thresh_info_percentile),
-                                   q[q_local_maxima_index[i]] / q_thresh_info_max])
-                if q_local_maxima_index[i] == 0:
-                    below_ind = 0
-                else:
-                    q_below_ind = np.arange(q_local_maxima_index[i])
-                    below_ind = max(q_below_ind[np.abs(q[q_below_ind] - q_thresh).argmin()], last_above_ind)
-                q_above_ind = np.arange(q_local_maxima_index[i], p_initial_size)
-                above_ind = q_above_ind[np.abs(q[q_above_ind] - q_thresh).argmin()]
-                # Deal with case where grids around local maxima overlap
-                for j in range(i, nLocalMaxima - 1):
-                    if above_ind > q_local_maxima_index[j + 1]:
-                        nPointsPerSet[i] = nPointsPerSet[i] + nPointsPerSet[j + 1]
-                        nPointsPerSet[j + 1] = 0
-                if i == 0 and below_ind != 0:
-                    nPointsPerSet[i] = nPointsPerSet[i] - 1
-                    p_array_indices.append(0)
-                if i == nLocalMaxima - 1 and above_ind != p_initial_size - 1:
-                    nPointsPerSet[i] = nPointsPerSet[i] - 1
-                q_grid_values = np.linspace(cum_q[below_ind], cum_q[above_ind], nPointsPerSet[i])
-                p_array_indices_set = [np.abs(cum_q - i).argmin() for i in q_grid_values]
-                p_array_indices = p_array_indices + p_array_indices_set
-                if i == nLocalMaxima - 1 and above_ind != p_initial_size - 1:
-                    p_array_indices.append(p_initial_size - 1)
-                last_above_ind = p_array_indices_set[-1] * 2 - p_array_indices_set[
-                    -2]  # Set to a step higher than max index
-        '''Deal with case where grid is too sparse in pressure space'''
-        p_interface = p_interface[p_array_indices]
-        log_p = np.log10(p_interface)
-        delta_log_p = abs(np.ediff1d(log_p))
-        to_correct = np.where(delta_log_p > log_p_min_sep)[0]
-        target_log_delta_p = log_p_min_sep / 2
-        for i in to_correct:
-            if nz_multiplier is not None:
-                p_range = np.logical_and(p0 < p_interface[i], p0 > p_interface[i + 1])
-                n_new_levels = max(int(max(q[p_range]) * nz_multiplier), 3)
-                new_levels = np.logspace(log_p[i], log_p[i + 1], n_new_levels + 2)
-                p_interface = np.flip(np.sort(np.append(p_interface, new_levels[1:-1])))
-                self.nz = len(p_interface)
-            else:
-                n_new_levels = int(min(max(np.ceil((log_p[i - 1] - log_p[i]) / target_log_delta_p), 3), self.nz / 10))
-                max_i_to_change = int(min(i + np.ceil(n_new_levels / 2), self.nz) - 1)
-                min_i_to_change = int(max(max_i_to_change - n_new_levels, 0))
-                if min_i_to_change == 0:
-                    max_i_to_change = n_new_levels
-                new_levels = np.logspace(log_p[min_i_to_change], log_p[max_i_to_change], n_new_levels + 1)
-                p_interface[min_i_to_change:max_i_to_change + 1] = new_levels
+            q_molecule = self.q_funcs[molecule_name](p_interface, *self.q_funcs_args[molecule_name])
+            q = q + q_molecule * absorb_coef
 
-        p_interface = np.tile(p_interface, (self.ny, 1)).transpose()  # nz x ny
-        return p_interface
+        log_p_array = np.log10(p_interface)
+        if self.nz == 'auto':
+            # make spacing of log pressure levels dependent on specific humidity, q
+            # i.e. larger q means more stuff means we need more pressure levels around it
+            log_q_array = np.log10(q)
+            min_log_p_spacing = -log_q_array.max() / min_log_p_spacing_factor
+            max_log_p_spacing = np.clip(-log_q_array.min() / max_log_p_spacing_factor,
+                                        min_log_p_spacing, max_max_log_p_spacing)
+
+            def get_log_p_spacing(log_q):
+                gradient = (max_log_p_spacing - min_log_p_spacing) / (log_q_array.min() - log_q_array.max())
+                intercept = max_log_p_spacing - gradient * log_q_array.min()
+                return gradient * log_q + intercept
+
+            log_p_current = log_p_array[0]
+            log_p_final = []
+            while log_p_current > log_p_array[-1]:
+                log_p_final.append(log_p_current)
+                ind = np.abs(log_p_array - log_p_current).argmin()
+                log_p_current = log_p_final[-1] - get_log_p_spacing(log_q_array[ind])
+            # ensure includes surface and toa pressures
+            log_p_final = np.array(log_p_final)
+            cum_diff = np.cumsum(abs(np.ediff1d(log_p_final)))
+            scale_factor = (log_p_array[0] - log_p_array[-1]) / cum_diff[-1]
+            cum_diff = cum_diff * scale_factor
+            log_p_final = np.concatenate((log_p_final[:1], log_p_final[0]-cum_diff))
+            self.nz = len(log_p_final)
+        else:
+            # log_p_0 = log_p_array[0]
+            # log_p_1 = log_p_0 - min_log_p_spacing
+            # log_p_n = log_p_array[-1]
+            # alpha = np.log(log_p_0 - log_p_1 + 1) / np.log(log_p_0 + 1 - log_p_n) / (1-self.nz)
+            # beta = np.exp((np.log(log_p_0 - log_p_1 + 1) / alpha))
+            # log_p_final = log_p_0 + 1 - beta ** (alpha * np.arange(self.nz + 1))
+            # cover all pressures in manner that log spacing between pressure levels is smaller
+            # near the surface
+            alpha = np.log10(log_p_array[0]-log_p_array[-1]+1)/(self.nz-1)
+            log_p_final = log_p_array[0] + 1 - 10**(alpha * np.arange(self.nz))
+            if log_p_final[-1] != log_p_array[-1]:
+                raise ValueError('Too few grid points to cover pressure grid')
+
+        p_interface = 10 ** log_p_final
+        return np.tile(p_interface, (self.ny, 1)).transpose()
+
+    def inital_Tg_guess(self):
+        """
+        Update T_g so sum of net_flux over all pressure levels is initially 0
+        """
+
+        def f(x):
+            self.T_g = x
+            self.up_flux, self.down_flux = self.get_flux()
+            self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
+                            np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
+            return sum(self.net_flux)
+
+        return optimize.newton(f, self.T_g)
+
+    def find_Tg(self, flux_thresh=0.1, tol=0.01):
+        """
+        finds ground temperature such that net flux at top of atmosphere is approximately less than tol
+
+        :param flux_thresh: float, optional.
+            Threshold in delta_net_flux to achieve equilibrium
+            default: 0.1
+        :param tol: float, optional.
+            default: 0.1
+        :return: T_g
+        """
+        print("Finding ground temperature to top of atmosphere flux balance...")
+
+        def f(x):
+            try:
+                print("Trying T_g = {:.1f} K".format(x))
+            except TypeError:
+                print("Trying T_g = {:.1f} K".format(x[0]))
+            self.T_g = x
+            _ = self.evolve_to_equilibrium(flux_thresh=flux_thresh, save=False)
+            return self.net_flux[0]
+
+        root = optimize.newton(f, self.T_g, tol=tol)
+        return root[0]
 
     def flux_integrals(self, j, T_interface):
         """
@@ -475,3 +490,69 @@ class RealGas(GreyGas):
         # up_flux = np.sum(up_flux * self.nu_bands['delta'], axis=1)
         # down_flux = np.sum(down_flux * self.nu_bands['delta'], axis=1)
         return up_flux, down_flux
+
+    def take_time_step(self, t, T_initial=None, changing_tau=False, convective_adjust=False,
+                       net_flux_thresh=1e-7, net_flux_percentile=95):
+        """
+        This finds the fluxes given the current temperature profile. It then finds a suitable time step through
+        the function update_time_step. It will then update the temperature profile accordingly.
+
+        :param t: float.
+            time since start of simulation.
+        :param T_initial: numpy array, optional.
+            Temperature profile to start simulation from. If not specified, will use isothermal profile.
+            Will only apply if t==0.
+            default: None
+        :param changing_tau: boolean, optional.
+            Whether the optical depth is changing with time. If it is not, algorithm will adjust to try to reach
+            equilibrium.
+            default: False
+        :param convective_adjust: boolean, optional.
+            Whether the temperature profile should adjust to stay stable with respect to convection.
+            default: False
+        :param net_flux_thresh: float, optional.
+            Only update temperature at pressure levels where change in net flux between time steps
+            is less than net_flux_thresh.
+            default: 1e-7.
+        :param net_flux_percentile: float, optional.
+            delta_net_flux is the change in net flux of the percentile of the grid given by this.
+            So 100 means max, lower gives some leeway to outliers.
+            default: 95.
+        :return:
+        t: time after current time step.
+        delta_net_flux: difference in net flux between time steps. Lower means reaching convergence.
+        """
+        if t == 0 and T_initial is not None:
+            self.T = T_initial
+        self.up_flux, self.down_flux = self.get_flux()
+        # sum over wavenumbers
+        net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
+                   np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
+        # net_lw_flux should be zero everywhere in equilibrium
+        t, delta_net_flux = self.update_temp(t, net_flux.reshape(-1, 1), changing_tau, convective_adjust,
+                                             net_flux_thresh, net_flux_percentile)
+        return t, delta_net_flux
+
+    def save_data(self, data_dict, t):
+        """
+        This appends the time and current Temperature to the data_dict. It will also add optical depth and
+        flux data if they are already in data_dict.
+
+        :param data_dict: dictionary.
+            Must contain 't' and 'T' keys. Can also contain 'flux' keys.
+            The info in this dictionary is used to pass to plot_animate.
+        :param t: float.
+            Current time.
+        :return:
+            data_dict
+        """
+        data_dict['t'].append(t)
+        data_dict['T'].append(self.T.copy())
+        if "flux" in data_dict:
+            sw = self.nu_bands['sw']
+            lw = sw == False
+            data_dict['flux']['lw_up'].append(np.sum(self.up_flux[:, lw] * self.nu_bands['delta'][lw], axis=1))
+            data_dict['flux']['lw_down'].append(np.sum(self.down_flux[:, lw] * self.nu_bands['delta'][lw], axis=1))
+            data_dict['flux']['sw_up'].append(np.sum(self.up_flux[:, sw] * self.nu_bands['delta'][sw], axis=1))
+            data_dict['flux']['sw_down'].append(np.sum(self.down_flux[:, sw] * self.nu_bands['delta'][sw], axis=1))
+        return data_dict

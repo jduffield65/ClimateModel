@@ -18,8 +18,18 @@ def convective_adjustment(p, T, lapserate=g/c_p_dry):
     """
     if len(np.shape(p)) > 1:
         raise ValueError('Pressure has wrong dimension, must be only in the z dimension')
+    if p[1] > p[0]:
+        # ensure pressure is descending
+        invert_p = True
+        p = p[::-1]
+        T = T[::-1, :]
+    else:
+        invert_p = False
     for i in range(np.shape(T)[1]):
         T[:, i] = convective_adjustment_single(p, T[:, i], lapserate)
+    if invert_p:
+        # revert temperature to previous order.
+        T = T[::-1, :]
     return T
 
 

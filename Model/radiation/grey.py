@@ -55,13 +55,11 @@ class GreyGas:
         self.latitude = np.linspace(-90, 90, self.ny)
         if inspect.isfunction(albedo):
             self.albedo = albedo(self.latitude)
-            self.albedo_function = albedo
         else:
             if np.size(albedo) < self.ny and np.size(albedo) == 1:
                 self.albedo = np.repeat(albedo, self.ny)
             else:
                 self.albedo = albedo
-            self.albedo_function = None
         self.F_stellar_constant = F_stellar_constant
         # net total down sw_flux with no atmosphere
         self.solar_latitude_factor = GreyGas.latitudinal_solar_distribution(self.latitude)
@@ -72,7 +70,7 @@ class GreyGas:
         self.tau_sw_func = tau_sw_func
         self.tau_sw_func_args = tau_sw_func_args
         self.sw_tau_is_zero = self.tau_sw_func is None or self.tau_sw_func_args.count(0) > 0
-        self.p_interface, self.tau_interface = self.get_p_and_tau_interface_grids()
+        self.p_interface, self.tau_interface = self.get_p_grid()
         self.T = np.ones((self.nz - 1, self.ny)) * self.T0
         self.p = np.zeros((self.nz - 1, self.ny))  # at same height as temperature
         for i in range(self.nz - 1):
@@ -91,8 +89,8 @@ class GreyGas:
         self.net_flux = self.up_lw_flux - self.down_lw_flux + self.up_sw_flux - self.down_sw_flux
         self.time_step_info = None
 
-    def get_p_and_tau_interface_grids(self, nz_multiplier_param=100000, q_thresh_info_percentile=75,
-                                      q_thresh_info_max=1000, log_p_min_sep=0.1, tau_min_sep=1e-3):
+    def get_p_grid(self, nz_multiplier_param=100000, q_thresh_info_percentile=75,
+                   q_thresh_info_max=1000, log_p_min_sep=0.1, tau_min_sep=1e-3):
         """
         Get pressure and optical depth grids together so have good separation in both.
 
@@ -233,7 +231,6 @@ class GreyGas:
         else:
             lat_dist = 1
         return lat_dist
-
 
     def get_isothermal_temp(self):
         """Get initial isothermal temperature to satisfy radiation balance in absence of atmosphere"""
