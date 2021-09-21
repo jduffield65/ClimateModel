@@ -1,8 +1,7 @@
 from .real_gas_data.hitran import LookupTableFolder
 from ..constants import h_planck, speed_of_light, k_boltzmann, g, T_sun, R_sun, AU, p_surface, p_toa, sigma
 from .real_gas_data.specific_humidity import molecules
-from .grey import GreyGas
-from .base import grid_points_near_local_maxima, amend_sparse_pressure_grid, Atmosphere
+from .base import Atmosphere, round_any
 import numpy as np
 from math import ceil, floor
 import matplotlib.pyplot as plt
@@ -131,8 +130,53 @@ def transmission(p1, p2, p_all, nu_band, delta_nu_band, nu_all, tau):
 
 class RealGas(Atmosphere):
     def __init__(self, nz, ny, molecule_names, T_g=None, q_funcs=None, q_funcs_args=None, n_nu_bands=40,
-                 T_star=T_sun, R_star=R_sun, star_planet_dist=AU, albedo=0.3, temp_change=1):
+                 T_star=T_sun, R_star=R_sun, star_planet_dist=AU, albedo=0.3, temp_change=1, T_func=None):
+        """
 
+        :param nz: integer or 'auto'.
+            Number of pressure levels. If 'auto', chooses an appropriate amount such that have good spread
+            in both pressure and optical thickness, tau
+        :param ny: integer
+            Number of latitudes
+        :param molecule_names: list of strings
+            Will find contribution to optical depth from each of these molecules e.g. 'CO2', 'H2O'
+        :param T_g: float, optional.
+            Surface temperature in K. If None, will guess value to give approximate balance between fluxes at
+            top of atmosphere.
+            default: None
+        :param q_funcs: dictionary of functions
+            q_funcs[molecule_name](p, *q_funcs_args[molecule_name]) would compute the specific humidity due to
+            molecule_name at pressure p. If None, typical earth functions used.
+            default: None
+        :param q_funcs_args: dictionary of tuples
+            arguments to q_funcs other than pressure.
+            default: None
+        :param n_nu_bands: integer, optional.
+            number of wavenumber bands to use in flux calculations.
+            default: 40
+        :param T_star: float, optional.
+            Equivalent black body temperature of the starin K
+            default: T_sun
+        :param R_star: float, optional.
+            Radius of star (m).
+            default: R_sun
+        :param star_planet_dist: float, optional.
+            Distance between star and planet (m)
+            default: 1 AU
+        :param albedo: list, optional.
+            Upward short wave flux at top of atmosphere is (1-albedo[i])*F_stellar_constant*latitude_dist_factor[i]/4;
+            at each latitude index i. If give single value, will repeat this value at each latitude.
+            Can also be function of latitude.
+            default: 0.3 at each latitude.
+        :param temp_change: float, optional.
+            Time step is found so that at least one level will have a temperature change equal to this.
+            default: 1K.
+        :param T_func: function, optional.
+            Function to compute temperature profile given pressure as only argument.
+            Useful if want to compute OLR for specific Temperature profile.
+            If None, set to isothermal temperature everywhere.
+            default: None
+        """
         self.star = {'T': T_star, 'R': R_star, 'star_planet_dist': star_planet_dist}
         F_stellar_constant = sigma * self.star['T'] ** 4 * self.star['R'] ** 2 / \
                              self.star['star_planet_dist'] ** 2
@@ -161,14 +205,19 @@ class RealGas(Atmosphere):
         self.p = np.zeros((self.nz - 1, self.ny))  # at same height as temperature
         for i in range(self.nz - 1):
             self.p[i, :] = np.mean(self.p_interface[i:i + 2, :], 0)
-        self.T = np.ones_like(self.p) * self.T0
-        self.tau_interface = optical_depth(self.p_interface[:, 0], np.ones_like(self.p_interface[:, 0]) * self.T0,
-                                           self.nu, self.molecule_names, self.q_funcs, self.q_funcs_args)
+        if T_func is None:
+            self.T = np.ones_like(self.p) * self.T0
+            T_interface = np.ones_like(self.p_interface[:, 0]) * self.T0
+        else:
+            self.T = T_func(self.p)
+            T_interface = T_func(self.p_interface[:, 0])
+        self.tau_interface = optical_depth(self.p_interface[:, 0], T_interface, self.nu,
+                                           self.molecule_names, self.q_funcs, self.q_funcs_args)
         self.up_flux, self.down_flux = self.get_flux()
         self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
                         np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
         if T_g is None:
-            self.T_g = self.inital_Tg_guess()
+            self.inital_Tg_guess()
 
     def get_wavenumber_array(self, fract_to_ignore=0.001, fract_to_ignore_overlap=0.001):
         nu_initial = np.arange(10.0, 100000.0 + self.d_nu, self.d_nu)
@@ -332,7 +381,7 @@ class RealGas(Atmosphere):
             cum_diff = np.cumsum(abs(np.ediff1d(log_p_final)))
             scale_factor = (log_p_array[0] - log_p_array[-1]) / cum_diff[-1]
             cum_diff = cum_diff * scale_factor
-            log_p_final = np.concatenate((log_p_final[:1], log_p_final[0]-cum_diff))
+            log_p_final = np.concatenate((log_p_final[:1], log_p_final[0] - cum_diff))
             self.nz = len(log_p_final)
         else:
             # log_p_0 = log_p_array[0]
@@ -343,8 +392,8 @@ class RealGas(Atmosphere):
             # log_p_final = log_p_0 + 1 - beta ** (alpha * np.arange(self.nz + 1))
             # cover all pressures in manner that log spacing between pressure levels is smaller
             # near the surface
-            alpha = np.log10(log_p_array[0]-log_p_array[-1]+1)/(self.nz-1)
-            log_p_final = log_p_array[0] + 1 - 10**(alpha * np.arange(self.nz))
+            alpha = np.log10(log_p_array[0] - log_p_array[-1] + 1) / (self.nz - 1)
+            log_p_final = log_p_array[0] + 1 - 10 ** (alpha * np.arange(self.nz))
             if log_p_final[-1] != log_p_array[-1]:
                 raise ValueError('Too few grid points to cover pressure grid')
 
@@ -363,9 +412,13 @@ class RealGas(Atmosphere):
                             np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
             return sum(self.net_flux)
 
-        return optimize.newton(f, self.T_g)
+        self.T_g = optimize.newton(f, self.T_g)
+        self.up_flux, self.down_flux = self.get_flux()
+        self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
+                        np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
 
-    def find_Tg(self, flux_thresh=0.1, tol=0.01):
+
+    def find_Tg(self, flux_thresh=0.1, tol=0.01, convective_adjust=False):
         """
         finds ground temperature such that net flux at top of atmosphere is approximately less than tol
 
@@ -374,6 +427,9 @@ class RealGas(Atmosphere):
             default: 0.1
         :param tol: float, optional.
             default: 0.1
+        :param convective_adjust: boolean, optional.
+            Whether the temperature profile should adjust to stay stable with respect to convection.
+            default: False
         :return: T_g
         """
         print("Finding ground temperature to top of atmosphere flux balance...")
@@ -384,7 +440,7 @@ class RealGas(Atmosphere):
             except TypeError:
                 print("Trying T_g = {:.1f} K".format(x[0]))
             self.T_g = x
-            _ = self.evolve_to_equilibrium(flux_thresh=flux_thresh, save=False)
+            _ = self.evolve_to_equilibrium(flux_thresh=flux_thresh, save=False, convective_adjust=convective_adjust)
             return self.net_flux[0]
 
         root = optimize.newton(f, self.T_g, tol=tol)
@@ -556,3 +612,19 @@ class RealGas(Atmosphere):
             data_dict['flux']['sw_up'].append(np.sum(self.up_flux[:, sw] * self.nu_bands['delta'][sw], axis=1))
             data_dict['flux']['sw_down'].append(np.sum(self.down_flux[:, sw] * self.nu_bands['delta'][sw], axis=1))
         return data_dict
+
+    def plot_olr(self, olr_label='OLR'):
+        surface_up_flux = B_wavenumber(self.nu_lw, self.T_g) * np.pi
+        fig, ax = plt.subplots(1, 1)
+        ax.plot(self.nu_lw, surface_up_flux, color='k', label='$T_g={:.0f}$K blackbody'.format(self.T_g))
+        bands_use = self.nu_bands['sw'] == False
+        bands_use[np.where(bands_use == False)[0][0]] = True # add extra band so not cut off before end of axis
+        ax.scatter(self.nu_bands['centre'][bands_use],
+                   B_wavenumber(self.nu_bands['centre'][bands_use], self.T_g) * np.pi, color='k', s=10)
+        ax.plot(self.nu_bands['centre'][bands_use], self.up_flux[0, bands_use], label=olr_label)
+        ax.set_xlim((0, round_any(self.nu_lw.max(), 500, 'ceil')))
+        ax.set_ylim((0, round_any(surface_up_flux.max(), 0.05, 'ceil')))
+        ax.set_xlabel('Wavenumber cm$^{-1}$')
+        ax.set_ylabel('Flux Density ((W/m$^2$)/cm$^{-1}$)')
+        ax.legend()
+        return ax

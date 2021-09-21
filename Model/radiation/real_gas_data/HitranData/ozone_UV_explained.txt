@@ -1,0 +1,6 @@
+Had to get separate data for ozone in UV wavenumber range as HITRAN line data is only in infrared/visible.
+
+Got data from HITRAN --> Data Access --> Absorption cross sections --> Other molecules --> Ozone --> 273K
+
+This data is cut off at wavenumber = 41000 cm^-1 but still large value here. I assumed that the peak is symmetric about the maxima.
+

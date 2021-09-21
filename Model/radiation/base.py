@@ -4,8 +4,19 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import inspect
-
 import numpy as np
+from math import ceil, floor
+
+
+def round_any(x, base, round_type='round'):
+    if round_type == 'round':
+        return base * round(x / base)
+    elif round_type == 'ceil':
+        return base * ceil(x / base)
+    elif round_type == 'floor':
+        return base * floor(x / base)
+
+
 def t_years_days(t):
     t_full_days = t / (24 * 60 ** 2)
     t_years, t_days = divmod(t_full_days, 365)
@@ -39,114 +50,6 @@ def get_isothermal_temp(albedo, F_stellar=None, latitude=None, T_star=None, R_st
     if latitude is not None:
         F_stellar = F_stellar * latitudinal_solar_distribution(latitude)
     return np.power(F_stellar / sigma * (1 - albedo) / 4, 1 / 4)
-
-
-def grid_points_near_local_maxima(q, q_local_maxima_index, nz_multiplier_param,
-                                  q_thresh_info_percentile, q_thresh_info_max, nz):
-    """
-    Finds suitable number of grid points to give good resolution in q i.e. large number of points where
-    changing fast near local maxima. p_array_indices are all indices of p needed to resolve q well.
-
-    :param q: numpy array [p_initial_size]
-        some form of dtau/dp
-    :param q_local_maxima_index: list
-        indices of local maxima in q
-    :param nz_multiplier_param: float
-        nz_multiplier_param * q_local_max_value is number of points about each local maxima.
-    :param q_thresh_info_percentile: float
-        region about local maxima in which to build grid ends when q falls below this percentile of q
-    :param q_thresh_info_max: float
-        region about local maxima in which to build grid ends when q falls below q_local_max_value / q_thresh_info_max
-    :param nz: 'auto' or integer
-        desired number of grid points
-    :return: p_array_indices, nz. nz will be changed if was 'auto'.
-    """
-    p_initial_size = np.size(q)
-    last_above_ind = 0  # use max (new_below_ind, above_ind) so local maxima sections don't overlap
-    nLocalMaxima = len(q_local_maxima_index)
-    q_max_values = q[q_local_maxima_index]
-    if nz == 'auto':
-        nz_multiplier = max(
-            [nz_multiplier_param, max(5 / q_max_values)])  # have at least 5 grid points for each local maxima
-        nPointsPerSet = np.ceil(q_max_values * nz_multiplier).astype(int)
-        nz = sum(nPointsPerSet)
-    else:
-        nz_multiplier = None
-        nPointsPerSet = np.floor(q_max_values / sum(q_max_values) * nz).astype(int)
-        nPointsPerSet[-1] = nz - sum(nPointsPerSet[:-1])
-    p_array_indices = []
-    cum_q = np.cumsum(q)
-    for i in range(nLocalMaxima):
-        if nPointsPerSet[i] > 0:
-            # Determine where q falls significantly below local maxima.
-            q_thresh = np.min([np.percentile(q, q_thresh_info_percentile),
-                               q[q_local_maxima_index[i]] / q_thresh_info_max])
-            if q_local_maxima_index[i] == 0:
-                below_ind = 0
-            else:
-                q_below_ind = np.arange(q_local_maxima_index[i])
-                below_ind = max(q_below_ind[np.abs(q[q_below_ind] - q_thresh).argmin()], last_above_ind)
-            q_above_ind = np.arange(q_local_maxima_index[i], p_initial_size)
-            above_ind = q_above_ind[np.abs(q[q_above_ind] - q_thresh).argmin()]
-            # Deal with case where grids around local maxima overlap
-            for j in range(i, nLocalMaxima - 1):
-                if above_ind > q_local_maxima_index[j + 1]:
-                    nPointsPerSet[i] = nPointsPerSet[i] + nPointsPerSet[j + 1]
-                    nPointsPerSet[j + 1] = 0
-            if i == 0 and below_ind != 0:
-                nPointsPerSet[i] = nPointsPerSet[i] - 1
-                p_array_indices.append(0)
-            if i == nLocalMaxima - 1 and above_ind != p_initial_size - 1:
-                nPointsPerSet[i] = nPointsPerSet[i] - 1
-            q_grid_values = np.linspace(cum_q[below_ind], cum_q[above_ind], nPointsPerSet[i])
-            p_array_indices_set = [np.abs(cum_q - i).argmin() for i in q_grid_values]
-            p_array_indices = p_array_indices + p_array_indices_set
-            if i == nLocalMaxima - 1 and above_ind != p_initial_size - 1:
-                p_array_indices.append(p_initial_size - 1)
-            last_above_ind = p_array_indices_set[-1] * 2 - p_array_indices_set[
-                -2]  # Set to a step higher than max index
-    return p_array_indices, nz_multiplier, nz
-
-
-def amend_sparse_pressure_grid(to_correct, nz_multiplier, p0, p_interface, q, target_log_delta_p, nz, ny):
-    """
-    Amends grid to desired pressure resolution in regions where grid points too sparse.
-
-    :param to_correct: numpy array
-        indices in p_interface where grid is too sparse
-    :param nz_multiplier: float or None
-        nz_multiplier * q_local_max_value is number of points about each local maxima.
-    :param p0: numpy array [p_initial_size]
-        initial very high resolution pressure grid
-    :param p_interface: numpy array [nz]
-        current pressure grid
-    :param q: numpy array [p_initial_size]
-        some form of dtau/dp
-    :param target_log_delta_p: float
-        Try to have a minimum log10 pressure separation of target_log_delta_p in grid.
-    :param nz: integer
-    :param ny: integer
-    :return:
-    """
-    log_p = np.log10(p_interface)
-    for i in to_correct:
-        if nz_multiplier is not None:
-            p_range = np.logical_and(p0 < p_interface[i], p0 > p_interface[i + 1])
-            n_new_levels = max(int(max(q[p_range]) * nz_multiplier), 3)
-            new_levels = np.logspace(log_p[i], log_p[i + 1], n_new_levels + 2)
-            p_interface = np.flip(np.sort(np.append(p_interface, new_levels[1:-1])))
-            nz = len(p_interface)
-        else:
-            n_new_levels = int(min(max(np.ceil((log_p[i - 1] - log_p[i]) / target_log_delta_p), 3), nz / 10))
-            max_i_to_change = int(min(i + np.ceil(n_new_levels / 2), nz) - 1)
-            min_i_to_change = int(max(max_i_to_change - n_new_levels, 0))
-            if min_i_to_change == 0:
-                max_i_to_change = n_new_levels
-            new_levels = np.logspace(log_p[min_i_to_change], log_p[max_i_to_change], n_new_levels + 1)
-            p_interface[min_i_to_change:max_i_to_change + 1] = new_levels
-
-    p_interface = np.tile(p_interface, (ny, 1)).transpose()  # nz x ny
-    return p_interface, nz
 
 
 class Atmosphere:

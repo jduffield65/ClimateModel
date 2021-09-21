@@ -29,6 +29,10 @@ required_fields = ['molec_id', 'local_iso_id', 'nu', 'sw', 'elower', 'gamma_air'
 p_reference = p_one_atmosphere
 T_reference = 296
 
+table_p_values = np.logspace(np.log10(p_surface), np.log10(p_toa), 200)
+table_T_values = np.arange(250, 350 + 10, 20)
+table_dnu = 10
+
 
 def load_molecule_data(molecule_name):
     molecule_file = data_folder + molecule_name + '.txt'
@@ -51,7 +55,7 @@ def get_consecutive_numbers(array):
     return consec_array
 
 
-def get_wavenumber_array(molecule_data, dwavenumber=10, bin_spacing=500, hist_thresh=100):
+def get_wavenumber_array(molecule_data, dwavenumber=10, bin_spacing=500, hist_thresh=100, n_line_widths=1000):
     """
     Produce histogram of number of lines in each wavenumber range of size bin_spacing, weighted by
     the strength of the lines. Cut off wavenumber is where weighted_histogram < hist_thresh.
@@ -69,7 +73,9 @@ def get_wavenumber_array(molecule_data, dwavenumber=10, bin_spacing=500, hist_th
     weights[weights == 99] = 0.1
     weights[weights > 100] = 100
 
-    bins = np.arange(molecule_data['nu'].min(), molecule_data['nu'].max() + bin_spacing, bin_spacing)
+    bins = np.arange(molecule_data['nu'].min()-n_line_widths*molecule_data['gamma_air'][molecule_data['nu'].argmin()],
+                     molecule_data['nu'].max()+n_line_widths*molecule_data['gamma_air'][molecule_data['nu'].argmax()]
+                     + bin_spacing-2, bin_spacing)
     hist_data = np.histogram(molecule_data['nu'], bins,  weights=weights)
     bins_below_thresh = np.where(hist_data[0] < hist_thresh)[0]
     consec_bins_below_thresh = get_consecutive_numbers(bins_below_thresh)
@@ -208,54 +214,107 @@ def get_absorption_coefficient(p, T, wavenumber_array, molecule_name, molecule_d
         line_absorb_coef, i1, i2 = single_line_absorption_coefficient(p, T, wavenumber_grid, line_data,
                                                                       d_wavenumber, n_line_widths)
         absorption_coef_grid[:, i1:i2] += line_absorb_coef
-    return absorption_coef_grid, molecule_data
+    return absorption_coef_grid
 
 
-def make_table(p_array, T_array, molecule_name, dwavenumber=10, n_line_widths=1000):
+def ozone_UV(wavenumber_array, p_array, T_array):
+    """
+    This reads in separate data file which has absorption coefficient in some of UV range at 273 K
+    Then initialises absorption grid so that it includes this data.
+    Assumes in this range, absorption coefficient is independent of temperature and pressure.
+
+    :param wavenumber_array: numpy array [n_nu_IR]
+        nu values in IR regime
+    :param p_array: numpy array
+    :param T_array: numpy array
+    :return:
+        wavenumber_array [n_nu] and absorption grid [np x nT x n_nu]
+    """
+    """Get UV data"""
+    # read in UV absorption cross section data
+    file = data_folder + 'O3_UV_273.xsc'
+    header = open(file).readline().rstrip() # [molecule, nu_min, nu_max,
+    header = list(header.split('\t'))  # ensure first line is tab separated first
+    min_nu = float(header[1])  # minimum wavenumber (cm-1)
+    max_nu = float(header[2])  # maximum wavenumber (cm-1)
+    N_nu = int(header[3])  # number of datapoints
+    T = float(header[4])  # Temperature
+    nu = np.linspace(min_nu, max_nu, N_nu)
+    d_nu_raw_data = nu[1] - nu[0]
+    absorption_coef = np.genfromtxt(file, skip_header=1).flatten()[:-1]  # in cm^2/molecule (last value is 0)
+    absorption_coef = s_conversion(absorption_coef, molecules['O3']['M'])  # in m^2/kg
+
+    # extrapolate, assuming symmetric about maxima
+    max_ind = absorption_coef.argmax()
+    repeat_end_ind = np.where(absorption_coef < absorption_coef[-1])[0]  # where absorption is less than final value
+    repeat_end_ind = repeat_end_ind[repeat_end_ind < max_ind][-1]  # also less than max index
+    repeat_nu = nu[:repeat_end_ind+1] - nu.min() + d_nu_raw_data + nu[-1]
+    repeat_absorption = absorption_coef[:repeat_end_ind+1][::-1]
+    nu = np.concatenate((nu, repeat_nu))
+    absorption_coef = np.concatenate((absorption_coef, repeat_absorption))
+
+    # get average at every 10cm^-1
+    d_nu_target = int(round((wavenumber_array[1] - wavenumber_array[0])))  # ensure odd
+    nu_convolve = np.convolve(nu, np.ones(d_nu_target+1)/(d_nu_target+1), mode='valid')
+    absorption_coef_convolve = np.convolve(absorption_coef, np.ones((d_nu_target+1))/(d_nu_target+1), mode='valid')
+    use = divmod(nu_convolve, d_nu_target)[1] == 0
+    nu_final = nu_convolve[use]
+    absorption_coef_final = absorption_coef_convolve[use]
+    absorption_coef_final[0] = 10**-15  # very small so wavenumbers between UV and IR assigned value of 0.
+
+    """append UV data to IR data"""
+    if nu_final[0] < wavenumber_array[-1]:
+        raise ValueError('UV and IR wavenumber regions overlap')
+    wavenumber_final = np.concatenate((wavenumber_array, nu_final))
+    absorption_coef_grid = np.zeros((np.size(p_array), np.size(T_array), np.size(wavenumber_final)))
+    uv_nu_index = np.where(wavenumber_final.reshape(-1, 1) == nu_final)[0]
+    # have same UV absorption for all pressures and temperatures
+    absorption_coef_grid[:, :, uv_nu_index] = absorption_coef_final
+    return wavenumber_final, absorption_coef_grid
+
+
+def make_table(molecule_name, p_array=table_p_values, T_array=table_T_values,
+               dwavenumber=table_dnu, n_line_widths=1000, wavenumber_array=None):
+    if isinstance(molecule_name, dict):
+        molecule_data = molecule_name
+        molecule_name = 'custom'
     output_file = LookupTableFolder + molecule_name + '.npy'
     if os.path.isfile(output_file) is True:
         raise ValueError('Lookuptable file already exists')
-    molecule_data = load_molecule_data(molecule_name)
-    wavenumber_array = get_wavenumber_array(molecule_data, dwavenumber)
+    if molecule_name != 'custom':
+        molecule_data = load_molecule_data(molecule_name)
+    if wavenumber_array is None:
+        wavenumber_array = get_wavenumber_array(molecule_data, dwavenumber, n_line_widths=n_line_widths)
     molecule_data = update_molecule_data(molecule_data, wavenumber_array)
-
+    if molecule_name == 'O3':
+        # add uv data for ozone
+        wavenumber_array, absorption_coef_grid = ozone_UV(wavenumber_array, p_array, T_array)
+    else:
+        absorption_coef_grid = np.zeros((np.size(p_array), np.size(T_array), np.size(wavenumber_array)))
     final_dict = {'p': p_array, 'T': T_array, 'nu': wavenumber_array}
-    absorption_coef_grid = np.zeros((np.size(p_array), np.size(T_array), np.size(wavenumber_array)))
     for i in range(np.size(T_array)):
         print('Obtaining absorption coefficient ' + str(i + 1) + '/' + str(np.size(T_array)))
         T = np.ones_like(p_array) * T_array[i]
-        absorption_coef_grid[:, i, :], _ = get_absorption_coefficient(p_array, T, wavenumber_array,
-                                                                                  molecule_name, molecule_data,
-                                                                                  n_line_widths)
+        absorption_coef_grid[:, i, :] += get_absorption_coefficient(p_array, T, wavenumber_array,
+                                                                    molecule_name, molecule_data, n_line_widths)
     final_dict['absorption_coef'] = absorption_coef_grid
     np.save(data_folder + 'LookupTables/' + molecule_name + '.npy', final_dict)
     # read_dictionary = np.load(output_file, allow_pickle='TRUE').item()
 
 
-def plot_absorption_coefficient(p_array, T_array, p_plot, wavenumber_array, absorption_grid, molecule_name):
-    p_index = np.abs(p_array - p_plot).argmin()
-    p_actual_plot = int(round(p_array[p_index]))
-    T_actual_plot = int(round(T_array[p_index]))
+def plot_absorption_coefficient(molecule_name, p_plot, T_plot):
+    output_file = LookupTableFolder + molecule_name + '.npy'
+    dict = np.load(output_file, allow_pickle='TRUE').item()
+    p_index = np.abs(dict['p'] - p_plot).argmin()
+    T_index = np.abs(dict['T'] - T_plot).argmin()
+    absorption_coef = dict['absorption_coef'][p_index, T_index]
+    p_actual_plot = int(round(dict['p'][p_index]))
+    T_actual_plot = int(round(dict['T'][T_index]))
     fig, ax = plt.subplots(1, 1)
-    ax.plot(wavenumber_array, absorption_grid[p_index, :])
+    ax.plot(dict['nu'], absorption_coef)
     ax.set_yscale('log')
-    ax.set_ylim((10 ** -10, max(10 ** 6, absorption_grid.max())))
-    ax.set_xlim(wavenumber_array.min(), wavenumber_array.max())
+    ax.set_ylim((10 ** -10, max(10 ** 6, absorption_coef.max())))
+    ax.set_xlim(dict['nu'].min(), dict['nu'][np.where(absorption_coef > 10**-10)[0][-1]])
     ax.set_xlabel('Wavenumber cm$^{-1}$')
     ax.set_ylabel('Absorption coefficient (m$^2$/kg)')
     ax.set_title(molecule_name + ' at (' + str(T_actual_plot) + ' K, ' + str(p_actual_plot) + ' Pa), air-broadened')
-
-
-if __name__ == '__main__':
-    molecule_name = 'CO2'
-    # wave_number_start = 25
-    # wave_number_end = 3000
-    dwave_number = 10
-    # wavenumber_array = np.arange(wave_number_start, wave_number_end, dwave_number, dtype=float)
-    p_array = np.logspace(np.log10(p_surface), np.log10(p_toa), 200)
-    T_array = np.arange(250, 350 + 10, 20)
-    make_table(p_array, T_array, molecule_name, dwave_number)
-    # T_array = np.ones_like(p_array) * 260
-    # absorb_coef_grid, _ = get_absorption_coefficient(p_array, T_array, wavenumber_array, molecule_name)
-    # plot_absorption_coefficient(p_array, T_array, p_surface, wavenumber_array, absorb_coef_grid, molecule_name)
-    # plt.show()
