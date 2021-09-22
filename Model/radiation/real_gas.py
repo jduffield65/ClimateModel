@@ -1,11 +1,10 @@
 from .real_gas_data.hitran import LookupTableFolder
-from ..constants import h_planck, speed_of_light, k_boltzmann, g, T_sun, R_sun, AU, p_surface, p_toa, sigma
+from ..constants import h_planck, speed_of_light, k_boltzmann, g, T_sun, R_sun, AU, p_surface_earth, p_toa_earth, sigma
 from .real_gas_data.specific_humidity import molecules
 from .base import Atmosphere, round_any
 import numpy as np
-from math import ceil, floor
+from math import ceil
 import matplotlib.pyplot as plt
-from scipy.signal import argrelextrema
 from scipy.interpolate import interp1d, InterpolatedUnivariateSpline
 from scipy import optimize
 
@@ -43,13 +42,15 @@ def B_wavenumber(nu, T):
 
 def get_absorption_coef(p, T, nu, absorb_coef_dict):
     """
+    Given the absorption coefficient data at all pressures, temperatures and wavenumbers
+    This returns the value at the subset of pressures and temperatures indicated by p, T and nu.
 
-    :param p: [np]
-    :param T: [np]
-    :param nu: [n_wavenumber]
-    :param absorb_coef_dict: dictionary
+    :param p: numpy array [np_crop]
+    :param T: numpy array [np_crop]
+    :param nu: numpy array [n_wavenumber]
+    :param absorb_coef_dict: dictionary ['p [np]', 'T [nT]', 'nu [n_nu]', 'absorption_coef [np x nT x n_nu]']
     :return:
-        absorb_coef [np x n_wavenumber]
+        absorb_coef [np_crop x n_wavenumber]
     """
     p_dict_ind = np.abs(p.reshape(-1, 1) - absorb_coef_dict['p'].reshape(-1, 1).transpose()).argmin(axis=1)
     T_dict_ind = np.abs(T.reshape(-1, 1) - absorb_coef_dict['T'].reshape(-1, 1).transpose()).argmin(axis=1)
@@ -104,6 +105,7 @@ def optical_depth(p, T, wavenumber, molecule_names, q_funcs, q_funcs_args):
 
 def transmission(p1, p2, p_all, nu_band, delta_nu_band, nu_all, tau):
     """
+    Computes the transmission function for a given wavenumber band.
 
     :param p1: numpy array [np1]
     :param p2: numpy array [np2]
@@ -130,7 +132,8 @@ def transmission(p1, p2, p_all, nu_band, delta_nu_band, nu_all, tau):
 
 class RealGas(Atmosphere):
     def __init__(self, nz, ny, molecule_names, T_g=None, q_funcs=None, q_funcs_args=None, n_nu_bands=40,
-                 T_star=T_sun, R_star=R_sun, star_planet_dist=AU, albedo=0.3, temp_change=1, T_func=None):
+                 T_star=T_sun, R_star=R_sun, star_planet_dist=AU, albedo=0.3, temp_change=1, T_func=None,
+                 p_surface=p_surface_earth, p_toa=p_toa_earth):
         """
 
         :param nz: integer or 'auto'.
@@ -176,13 +179,20 @@ class RealGas(Atmosphere):
             Useful if want to compute OLR for specific Temperature profile.
             If None, set to isothermal temperature everywhere.
             default: None
+        :param p_surface: float, optional.
+            Pressure in Pa at surface.
+            default: p_surface_earth = 101320 Pa
+        :param p_toa: float, optional.
+            Pressure in Pa at top of atmosphere
+            default: p_toa_earth = 20 Pa
         """
         self.star = {'T': T_star, 'R': R_star, 'star_planet_dist': star_planet_dist}
         F_stellar_constant = sigma * self.star['T'] ** 4 * self.star['R'] ** 2 / \
                              self.star['star_planet_dist'] ** 2
-        super().__init__(nz, ny, F_stellar_constant, albedo, temp_change)
+        super().__init__(nz, ny, F_stellar_constant, albedo, p_surface, p_toa, temp_change)
         if T_g is None:
-            self.T_g = self.T0 + 20  # assume some greenhouse warming
+            # assume some greenhouse warming (Guess of ground temperature. Needed to work out pressure grid)
+            self.T_g = self.T0 + 20
         else:
             self.T_g = T_g
         self.molecule_names = molecule_names
@@ -207,19 +217,36 @@ class RealGas(Atmosphere):
             self.p[i, :] = np.mean(self.p_interface[i:i + 2, :], 0)
         if T_func is None:
             self.T = np.ones_like(self.p) * self.T0
-            T_interface = np.ones_like(self.p_interface[:, 0]) * self.T0
+            self.T_interface = np.ones_like(self.p_interface[:, 0]) * self.T0
         else:
             self.T = T_func(self.p)
-            T_interface = T_func(self.p_interface[:, 0])
-        self.tau_interface = optical_depth(self.p_interface[:, 0], T_interface, self.nu,
+            self.T_interface = T_func(self.p_interface[:, 0])
+        self.tau_interface = optical_depth(self.p_interface[:, 0], self.T_interface, self.nu,
                                            self.molecule_names, self.q_funcs, self.q_funcs_args)
         self.up_flux, self.down_flux = self.get_flux()
         self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
                         np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
         if T_g is None:
+            # update guess of ground temperature
             self.inital_Tg_guess()
+        delattr(self, 'T_interface') # only needed for tau calculation.
 
     def get_wavenumber_array(self, fract_to_ignore=0.001, fract_to_ignore_overlap=0.001):
+        """
+        Gets wavenumber values which cover both planetary and stellar spectrum.
+
+        :param fract_to_ignore: float, optional.
+            Wavenumber range is chosen so that this fraction of planetary and stellar flux is neglected.
+            default: 0.001
+        :param fract_to_ignore_overlap: float, optional.
+            fraction of planetary flux over which we can neglect integral in flux calculation.
+        :return:
+            nu: all wavenumbers [n_nu]
+            nu_lw: wavenumbers over which we need to perform the integral in flux calc [n_nu_lw]
+            nu_overlap: wavenumbers over which we must consider stellar and planetary spectrums when finding
+                wavenumber bands [n_nu_overlap]
+            nu_sw: wavenumbers over which we can ignore integral in flux calc [n_nu - n_nu_lw]
+        """
         nu_initial = np.arange(10.0, 100000.0 + self.d_nu, self.d_nu)
         B_star = B_wavenumber(nu_initial, self.star['T'])
         B_planet = B_wavenumber(nu_initial, self.T_g)
@@ -242,8 +269,8 @@ class RealGas(Atmosphere):
 
     def get_wavenumber_bands(self, nu_overlap):
         """
-        bands small enough that B essentially constant over range of band.
-        :return:
+        Gets self.n_nu_bands in way that best keeps planetary+stellar flux constant over each wavenumber band.
+        :return: dictonary ['range': lists, 'centre': floats, 'delta': floats, 'sw': booleans]
         """
         B_star = B_wavenumber(self.nu_sw, self.star['T'])
         # get incoming flux at toa fro star Wm^-2
@@ -278,6 +305,8 @@ class RealGas(Atmosphere):
         bands_lw = get_equal_bands(nu_lw_only, B_planet, n_lw_bands)
         bands_sw = get_equal_bands(self.nu_sw, B_star, n_sw_bands)
 
+        # in overlap region must consider both stellar and planetary flux.
+        # Here we add them together in such a way that flux increases with wavenumber.
         B_overlap_planet = B_overlap_planet / max(B_planet)
         B_overlap_star = B_overlap_star / max(B_star)
         if max(B_overlap_star) == 1 or max(B_overlap_planet) == 1:
@@ -309,7 +338,8 @@ class RealGas(Atmosphere):
     def get_p_grid(self, min_absorb_coef_use=10e-6, min_log_p_spacing_factor=5000, max_log_p_spacing_factor=50,
                    max_max_log_p_spacing=0.2):
         """
-        Get pressure and optical depth grids together so have good separation in both.
+        Get pressure grid so grid points are most dense where dtau/dp or the specific humidity x absorption coefficient
+        is largest. This is so there is more resolution in areas where the atmosphere affects radiation more.
 
         :param min_absorb_coef_use: float, optional
             used to get absorption coef summed over all significant nu. significant nu where absorbption
@@ -324,7 +354,6 @@ class RealGas(Atmosphere):
         :param max_max_log_p_spacing: float, optional
             any spacing of log pressure cannot exceed this.
             default: 0.2
-
         :return:
         p_interface: numpy array.
             Pressure grid levels for flux calc.
@@ -334,8 +363,7 @@ class RealGas(Atmosphere):
             p_initial_size = int(1e6)
         else:
             p_initial_size = int(self.nz * 1000)
-        p_interface = np.logspace(np.log10(p_surface), np.log10(p_toa), p_initial_size)  # can only do with ny=1
-        p0 = p_interface.copy()
+        p_interface = np.logspace(np.log10(self.p_surface), np.log10(self.p_toa), p_initial_size)  # can only do with ny=1
 
         '''Get mass concentrations x absorption coef (i.e. dtau/dp) so ensure have grid points around local maxima'''
         q = np.zeros_like(p_interface)
@@ -349,8 +377,14 @@ class RealGas(Atmosphere):
             use_nu = np.max(absorb_coef_all_nu, axis=0) > min_absorb_coef_use
             absorb_coef = np.mean(absorb_coef_all_nu[:, use_nu], axis=1)
             absorb_coef = absorb_coef / np.max(absorb_coef)
-            coef_interp = interp1d(absorb_coef_dict['p'], absorb_coef)
-            absorb_coef = coef_interp(p_interface)
+            if len(absorb_coef) > 1:
+                coef_interp = interp1d(absorb_coef_dict['p'], absorb_coef)
+                to_interp = np.where(p_interface >= absorb_coef_dict['p'].min())[0]
+                absorb_coef = np.ones_like(p_interface)
+                absorb_coef[to_interp] = coef_interp(p_interface[to_interp])
+                # set low pressure values to smallest pressure value in data table.
+                absorb_coef[p_interface < absorb_coef_dict['p'].min()] = absorb_coef[to_interp[-1]]
+
             # to ensure find local maxima if at surface, add value one index away from surface below surface too.
             # subtract small amount to correct for case where value at surface = value one away from surface
             q_molecule = self.q_funcs[molecule_name](p_interface, *self.q_funcs_args[molecule_name])
@@ -361,14 +395,22 @@ class RealGas(Atmosphere):
             # make spacing of log pressure levels dependent on specific humidity, q
             # i.e. larger q means more stuff means we need more pressure levels around it
             log_q_array = np.log10(q)
+            log_q_array[q==0] = log_q_array[q > 0].min()  #  ensure no nan values
             min_log_p_spacing = -log_q_array.max() / min_log_p_spacing_factor
             max_log_p_spacing = np.clip(-log_q_array.min() / max_log_p_spacing_factor,
                                         min_log_p_spacing, max_max_log_p_spacing)
+            # deal with cases where most of pressure levels are near maxima
+            # to avoid nz too large.
+            fract_large = sum(q > 0.9 * q.max()) / len(q)
+            min_log_p_spacing = fract_large * max_log_p_spacing + (1-fract_large) * min_log_p_spacing
 
             def get_log_p_spacing(log_q):
-                gradient = (max_log_p_spacing - min_log_p_spacing) / (log_q_array.min() - log_q_array.max())
-                intercept = max_log_p_spacing - gradient * log_q_array.min()
-                return gradient * log_q + intercept
+                if log_q_array.min() == log_q_array.max():
+                    return min_log_p_spacing
+                else:
+                    gradient = (max_log_p_spacing - min_log_p_spacing) / (log_q_array.min() - log_q_array.max())
+                    intercept = max_log_p_spacing - gradient * log_q_array.min()
+                    return gradient * log_q + intercept
 
             log_p_current = log_p_array[0]
             log_p_final = []
@@ -413,10 +455,14 @@ class RealGas(Atmosphere):
             return sum(self.net_flux)
 
         self.T_g = optimize.newton(f, self.T_g)
+        # update wavenumber bands given new ground temperature (surface radiation now changed)
+        self.nu, self.nu_lw, nu_overlap, self.nu_sw = self.get_wavenumber_array()
+        self.nu_bands = self.get_wavenumber_bands(nu_overlap)
+        self.tau_interface = optical_depth(self.p_interface[:, 0], self.T_interface, self.nu,
+                                           self.molecule_names, self.q_funcs, self.q_funcs_args)
         self.up_flux, self.down_flux = self.get_flux()
         self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
                         np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
-
 
     def find_Tg(self, flux_thresh=0.1, tol=0.01, convective_adjust=False):
         """
@@ -432,7 +478,7 @@ class RealGas(Atmosphere):
             default: False
         :return: T_g
         """
-        print("Finding ground temperature to top of atmosphere flux balance...")
+        print("Finding ground temperature to give top of atmosphere flux balance...")
 
         def f(x):
             try:
@@ -542,9 +588,6 @@ class RealGas(Atmosphere):
                 integral_up, integral_down = self.flux_integrals(j, T_interface)
                 up_flux[:, j] += integral_up
                 down_flux[:, j] += integral_down
-        # sum over wavenumbers
-        # up_flux = np.sum(up_flux * self.nu_bands['delta'], axis=1)
-        # down_flux = np.sum(down_flux * self.nu_bands['delta'], axis=1)
         return up_flux, down_flux
 
     def take_time_step(self, t, T_initial=None, changing_tau=False, convective_adjust=False,
@@ -613,7 +656,13 @@ class RealGas(Atmosphere):
             data_dict['flux']['sw_down'].append(np.sum(self.down_flux[:, sw] * self.nu_bands['delta'][sw], axis=1))
         return data_dict
 
-    def plot_olr(self, olr_label='OLR'):
+    def plot_olr(self, olr_label='Top of atmosphere'):
+        """
+        Plots flux emitted by surface in long wave regime (uses integral in flux calc).
+        Also plots upward flux in long wave regime at top of atmosphere (Outgoing longwave radiation OLR).
+        :param olr_label: label to give top of atmosphere flux.
+        :return: ax so can add new lines.
+        """
         surface_up_flux = B_wavenumber(self.nu_lw, self.T_g) * np.pi
         fig, ax = plt.subplots(1, 1)
         ax.plot(self.nu_lw, surface_up_flux, color='k', label='$T_g={:.0f}$K blackbody'.format(self.T_g))
@@ -627,4 +676,30 @@ class RealGas(Atmosphere):
         ax.set_xlabel('Wavenumber cm$^{-1}$')
         ax.set_ylabel('Flux Density ((W/m$^2$)/cm$^{-1}$)')
         ax.legend()
+        ax.set_title('Upward Planetary Radiation')
+        return ax
+
+    def plot_incoming_short_wave(self, sw_label='Surface'):
+        """
+        Plots incoming radiation at top of atmosphere in short wave regime (no integral in flux calc).
+        Also plots downward flux in short wavenumber regime at surface.
+        :param sw_label: label to give surface flux.
+        :return: ax so can add new lines.
+        """
+        def solar_flux(nu):
+            return B_wavenumber(nu, self.star['T']) * np.pi * \
+                   self.star['R'] ** 2 / self.star['star_planet_dist'] ** 2 * (1 - self.albedo) / 4
+        toa_flux = solar_flux(self.nu_sw)
+        fig, ax = plt.subplots(1, 1)
+        ax.plot(self.nu_sw, toa_flux, color='k', label='Top of atmosphere')
+        bands_use = self.nu_bands['sw']
+        ax.scatter(self.nu_bands['centre'][bands_use],
+                   solar_flux(self.nu_bands['centre'][bands_use]), color='k', s=10)
+        ax.plot(self.nu_bands['centre'][bands_use], self.down_flux[-1, bands_use], label=sw_label)
+        ax.set_xlim((0, round_any(self.nu_sw.max(), 10000, 'ceil')))
+        ax.set_ylim((0, round_any(toa_flux.max(), 0.005, 'ceil')))
+        ax.set_xlabel('Wavenumber cm$^{-1}$')
+        ax.set_ylabel('Flux Density ((W/m$^2$)/cm$^{-1}$)')
+        ax.legend()
+        ax.set_title('Downward Solar Radiation')
         return ax

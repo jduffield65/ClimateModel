@@ -10,8 +10,8 @@ We use approximations of red curve (2003) here.
 Figure 4 used to convert between altitude and pressure.
 """
 import numpy as np
-from ...constants import p_surface
-from scipy.interpolate import UnivariateSpline, interp1d
+from ...constants import p_surface_earth
+from scipy.interpolate import interp1d
 M_air = 28.97  # molar mass of air in gmol^-1
 
 
@@ -24,7 +24,7 @@ def p_altitude_convert(altitude=None, p=None):
     """
     # below 90km, assume linear correspondence
     h1 = 0.0
-    p1_log = np.log10(p_surface)
+    p1_log = np.log10(p_surface_earth)
     h2 = 90000.0
     p2_log = -1.0
     gradient = (p2_log - p1_log) / (h2-h1)
@@ -48,11 +48,10 @@ def p_altitude_convert(altitude=None, p=None):
 def humidity_from_ppmv(conc_ppmv, molecule_name):
     """
     Given molar concentration in parts per million by volume,
-    specific humidity is returned
+    specific humidity is returned (kg / kg)
 
-    :param conc_ppmv:
-    :param molecule_name:
-    :return:
+    :param conc_ppmv: numpy array
+    :param molecule_name: string e.g. 'CO2'
     """
     return conc_ppmv / 10 ** 6 * molecules[molecule_name]['M'] / M_air
 
@@ -62,7 +61,7 @@ def co2(p, q_surface=370, h_change=80000):
     q is constant for h < h_change and falls off linearly with h above h_change
     
     :param p: numpy array
-    :param q_surface: surface humidity [ppmv]
+    :param q_surface: surface humidity (ppmv)
     :param h_change: float, optional (meters)
         altitude above which q starts decreasing.
         default: 80000
@@ -86,7 +85,7 @@ def ch4(p, scale_factor=1):
     :param p: numpy array
     :param scale_factor: float, optional.
         Surface q gets multiplied by this amount, q further from surface gets multiplied by lesser amount
-        q at top of atmopshere always remains the same.
+        q at top of atmosphere always remains the same.
         default: 1
     """
     """Get interpolation function from data"""
@@ -113,7 +112,7 @@ def h2o(p, scale_factor=1):
     :param p: numpy array
     :param scale_factor: float, optional.
         Surface q gets multiplied by this amount, q further from surface gets multiplied by lesser amount
-        q at top of atmopshere always remains the same.
+        q at top of atmosphere always remains the same.
         default: 1
     """
     """Get interpolation function from data"""
@@ -130,7 +129,7 @@ def h2o(p, scale_factor=1):
     q = np.zeros_like(p)
     q[h < h_values.max()] = 10**interp_func(h[h < h_values.max()])
     q[q < 0] = 0
-    q = humidity_from_ppmv(q, 'H20')
+    q = humidity_from_ppmv(q, 'H2O')
     return q
 
 
@@ -158,8 +157,7 @@ def o3(p, scale_factor=1):
 
 
 # list hitran id and molecular mass in gmol^-1 for some molecules as well as humidity functions
-molecules = {'H20': {'hitran_id': 1, 'M': 18, 'q': h2o, 'q_args': (1,)},
+molecules = {'H2O': {'hitran_id': 1, 'M': 18, 'q': h2o, 'q_args': (1,)},
              'CO2': {'hitran_id': 2, 'M': 44, 'q': co2, 'q_args': (370, 80000)},
              'O3': {'hitran_id': 3, 'M': 48, 'q': o3, 'q_args': (1,)},
              'CH4': {'hitran_id': 6, 'M': 16, 'q': ch4, 'q_args': (1,)}}
-

@@ -1,4 +1,4 @@
-from ..constants import g, c_p_dry, sigma
+from ..constants import g, c_p_dry, sigma, p_surface_earth, p_toa_earth
 from .convective_adjustment import convective_adjustment
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -9,6 +9,10 @@ from math import ceil, floor
 
 
 def round_any(x, base, round_type='round'):
+    """
+    rounds the number x to the nearest multiple of base with the rounding done according to round_type.
+    e.g. round_any(3, 5) = 5. round_any(3, 5, 'floor') = 0.
+    """
     if round_type == 'round':
         return base * round(x / base)
     elif round_type == 'ceil':
@@ -18,6 +22,7 @@ def round_any(x, base, round_type='round'):
 
 
 def t_years_days(t):
+    """given t in seconds, returns (t_years, t_days)"""
     t_full_days = t / (24 * 60 ** 2)
     t_years, t_days = divmod(t_full_days, 365)
     return t_years, t_days
@@ -45,6 +50,23 @@ def latitudinal_solar_distribution(latitude, c=0.477):
 
 
 def get_isothermal_temp(albedo, F_stellar=None, latitude=None, T_star=None, R_star=None, star_planet_dist=None):
+    """
+    Computes the temperature of a planet with no atmosphere such that is in equilibrium with the incoming stellar
+    radiation.
+    :param albedo: numpy array [n_latitudes]
+        fraction of stellar light reflected at each latitude.
+    :param F_stellar: float
+        Flux density at surface of planet. Units = W/m^2;
+    :param latitude: numpy array [n_latitudes]
+        array of latitudes in degrees. If don't provide, finds global average.
+    :param T_star: float (not needed if give F_stellar)
+        Temperature of star in (Kelvin)
+    :param R_star: float (not needed if give F_stellar)
+        Radius of star (m)
+    :param star_planet_dist: float (not needed if give F_stellar)
+        Average distance between star and planet (m)
+    :return: [n_latitudes] numpy array
+    """
     if F_stellar is None:
         F_stellar = sigma * T_star ** 4 * R_star ** 2 / star_planet_dist ** 2
     if latitude is not None:
@@ -53,7 +75,8 @@ def get_isothermal_temp(albedo, F_stellar=None, latitude=None, T_star=None, R_st
 
 
 class Atmosphere:
-    def __init__(self, nz, ny, F_stellar_constant, albedo=0.3, temp_change=1, delta_temp_change=0.01):
+    def __init__(self, nz, ny, F_stellar_constant, albedo=0.3, p_surface=p_surface_earth, p_toa=p_toa_earth,
+                 temp_change=1, delta_temp_change=0.01):
         """
 
         :param nz: integer or 'auto'.
@@ -68,6 +91,12 @@ class Atmosphere:
             at each latitude index i. If give single value, will repeat this value at each latitude.
             Can also be function of latitude.
             default: 0.3 at each latitude.
+        :param p_surface: float, optional.
+            Pressure in Pa at surface.
+            default: p_surface_earth = 101320 Pa
+        :param p_toa: float, optional.
+            Pressure in Pa at top of atmosphere
+            default: p_toa_earth = 20 Pa
         :param temp_change: float, optional.
             Time step is found so that at least one level will have a temperature change equal to this.
             default: 1K.
@@ -77,6 +106,8 @@ class Atmosphere:
         """
         self.nz = nz
         self.ny = ny
+        self.p_surface = p_surface
+        self.p_toa = p_toa
         self.latitude = np.linspace(-90, 90, self.ny)
         if inspect.isfunction(albedo):
             self.albedo = albedo(self.latitude)
@@ -101,7 +132,7 @@ class Atmosphere:
                     net_flux_thresh=1e-7, net_flux_percentile=95):
         """
         This finds a suitable time step through the function update_time_step.
-         It will then update the temperature profile accordingly.
+        It will then update the temperature profile accordingly.
 
         :param t: float.
             time since start of simulation.
@@ -218,7 +249,7 @@ class Atmosphere:
         return equilibrium
 
     def evolve_to_equilibrium(self, data_dict=None, flux_thresh=1e-3, T_initial=None, convective_adjust=False,
-                              save=True):
+                              save=True, t_end=4.0):
         """
         This updates the temperature profile until the equilibrium condition is reached.
 
@@ -237,6 +268,12 @@ class Atmosphere:
         :param convective_adjust: boolean, optional.
             Whether the temperature profile should adjust to stay stable with respect to convection.
             default: False
+        :param save: boolean, optional.
+            Whether to save data to dictionary or not
+            default: True
+        :param t_end: float, optional.
+            Simulation will end after t_end years no matter what.
+            default: 4 years
         :return:
             data_dict
         """
@@ -245,9 +282,9 @@ class Atmosphere:
                 T_initial = self.T.copy()
             data_dict = {'t': [0], 'T': [T_initial.copy()]}
         t = data_dict['t'][-1]
+        t0 = t_years_days(t)[0] + t_years_days(t)[1]/365  # start time in years
         equilibrium = False
-        i=0
-        #print("Trying to reach equilibrium (flux_thresh = {:.4f})...".format(flux_thresh))
+        i = 0
         while not equilibrium:
             t, delta_net_flux = self.take_time_step(t, T_initial, changing_tau=False,
                                                     convective_adjust=convective_adjust)
@@ -260,6 +297,8 @@ class Atmosphere:
             if min(self.T.flatten()) < 0:
                 raise ValueError('Temperature is below zero')
             t_years, t_days = t_years_days(t)
+            if t_years + t_days/365 - t0 > t_end:
+                equilibrium = True
             print("{:.0f} Years, {:.0f} Days: delta_net_flux = {:.4f}".format(t_years, t_days, delta_net_flux),
                   end="\r")
             i += 1

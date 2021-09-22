@@ -1,4 +1,4 @@
-from ..constants import g, c_p_dry, sigma, p_surface, p_toa, F_sun, R_specific
+from ..constants import g, c_p_dry, p_surface_earth, R_specific
 import numpy as np
 from itertools import groupby
 from operator import itemgetter
@@ -48,7 +48,7 @@ def convective_adjustment_single(p, T, lapserate=g/c_p_dry):
     :return:
         new Temperature profile
     """
-    p_reference = p_surface
+    p_reference = p_surface_earth
     alpha = R_specific * lapserate / g
     theta = get_theta(T, p, p_reference, alpha)
     theta_diff = np.ediff1d(theta)

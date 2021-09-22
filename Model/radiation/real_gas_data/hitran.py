@@ -1,7 +1,7 @@
 import os
 import numpy as np
-# from ..constants import Avogadro, p_one_atmosphere, speed_of_light, h_planck, k_boltzmann, p_surface, p_toa
-from Model.constants import Avogadro, p_one_atmosphere, speed_of_light, h_planck, k_boltzmann, p_surface, p_toa
+from Model.constants import Avogadro, p_one_atmosphere, speed_of_light, h_planck, k_boltzmann,\
+    p_surface_earth, p_toa_earth
 from .specific_humidity import molecules
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -20,21 +20,31 @@ gamma_air: Air-broadened Lorentzian half-width at half-maximum at p = 1 atm and 
 gamma_self: Self-broadened HWHM at 1 atm pressure and 296 K (cm^-1.atm^-1)
 n_air: Temperature exponent for the air-broadened HWHM
 """
-data_folder = os.path.dirname(__file__) + '/HitranData/'
-LookupTableFolder = data_folder + 'LookupTables/'
+data_folder = os.path.dirname(__file__) + '/HitranData/'  # raw data here
+LookupTableFolder = data_folder + 'LookupTables/'  # where data saved to
 # could use gamma_self if on a planet with single molecule, but at the moment use gamma_air.
 required_fields = ['molec_id', 'local_iso_id', 'nu', 'sw', 'elower', 'gamma_air', 'n_air']  # ,'gamma_self']
 
 # reference values to compute gamma and sw given by hitran
 p_reference = p_one_atmosphere
 T_reference = 296
-
-table_p_values = np.logspace(np.log10(p_surface), np.log10(p_toa), 200)
+# Data saved to LookupTableFolder is [np x nT x n_nu] grid of absorption coefficients
+# pressure values used are table_p_values by default. Not a problem if different between different molecules
+# Temperature values used are table_T_values. Not a problem if different between different molecules
+# wavenumber values have a separation of dnu. Important to keep dnu the same for all molecules.
+table_p_values = np.logspace(np.log10(p_surface_earth), np.log10(p_toa_earth), 200)  # up to 20Pa
 table_T_values = np.arange(250, 350 + 10, 20)
 table_dnu = 10
 
 
 def load_molecule_data(molecule_name):
+    """
+    loads molecule data from hitran file, returns required data in the form of dictionary
+    where keys are those in required_fields list.
+
+    :param molecule_name: string e.g. 'CO2'
+    :return:
+    """
     molecule_file = data_folder + molecule_name + '.txt'
     molecule_data = np.genfromtxt(molecule_file, names=True)
     # ensure only correct molecule and most abundant molecule are loaded
@@ -49,6 +59,9 @@ def load_molecule_data(molecule_name):
 
 
 def get_consecutive_numbers(array):
+    """
+    finds clusters of consecutive values in an array
+    """
     consec_array = []
     for k, g in groupby(enumerate(array), lambda i_x: i_x[0] - i_x[1]):
         consec_array.append(list(map(itemgetter(1), g)))
@@ -60,11 +73,12 @@ def get_wavenumber_array(molecule_data, dwavenumber=10, bin_spacing=500, hist_th
     Produce histogram of number of lines in each wavenumber range of size bin_spacing, weighted by
     the strength of the lines. Cut off wavenumber is where weighted_histogram < hist_thresh.
 
-    :param molecule_data:
-    :param dwavenumber: cm^-1
-    :param bin_spacing: cm^-1
-    :param hist_thresh:
-    :return:
+    :param molecule_data: dictionary
+    :param dwavenumber: float (cm^-1)
+    :param bin_spacing: float (cm^-1)
+    :param hist_thresh: float
+    :param n_line_widths: integer.
+        number of line widths to keep of lines on extremities of wavenumber range.
     """
     weights = molecule_data['sw'].copy()
     # increase weights of small lines and decrease weights of large lines so count still important.
@@ -98,6 +112,11 @@ def get_wavenumber_array(molecule_data, dwavenumber=10, bin_spacing=500, hist_th
 
 
 def update_molecule_data(molecule_data, wavenumber_array):
+    """
+    reduce size of molecule_data by only considering lines in given wavenumber range
+    :param molecule_data: dictionary
+    :param wavenumber_array: numpy array
+    """
     # only keep lines with wavenumber in wavenumber array
     keep_lines = np.where(np.logical_and(molecule_data['nu'] >= wavenumber_array.min(),
                                          molecule_data['nu'] <= wavenumber_array.max()))
@@ -150,10 +169,11 @@ def s_extrapolate(T, s_reference, wave_number_line_center, n):
 
 def lorentzian_profile(wave_number_array, wave_number_line_center, gamma):
     """
-
-    :param wave_number_array: numpy array [n_p x n_wavenumber]
+    8 here: https://hitran.org/docs/definitions-and-units/
+    ignore pressure shift correction of line central wavenumber
+    :param wave_number_array: numpy array [n_p x n_nu]
     :param wave_number_line_center: float
-    :param gamma: [np x n_wavenumber]
+    :param gamma: [np x n_nu]
     :return:
     """
     return (1 / np.pi) * gamma / (gamma ** 2 + (wave_number_array - wave_number_line_center) ** 2)
@@ -181,13 +201,14 @@ def wavenumbers_near_line(wavenumber_array, array_spacing, wavenumber_line_cente
 
 def single_line_absorption_coefficient(p, T, wavenumber_grid, line_data, d_wavenumber, n_line_widths):
     """
-
+    Returns absorption coefficient for single line aswell as indices (i1:i2) of wavenumber_grid
+    where line covers.
     :param p: numpy array [np]
     :param T: numpy array [np]
     :param wavenumber_grid: numpy array [np x n_wavenumber]
     :param line_data: dictionary
     :param d_wavenumber: float
-    :param n_line_widths: integer
+    :param n_line_widths: integer, number of line widths to keep for each spectral line
     :return:
     """
     gamma = gamma_extrapolate(p, T, line_data['gamma_air'], line_data['n_air'])
@@ -200,6 +221,15 @@ def single_line_absorption_coefficient(p, T, wavenumber_grid, line_data, d_waven
 
 
 def get_absorption_coefficient(p, T, wavenumber_array, molecule_name, molecule_data=None, n_line_widths=1000):
+    """
+    Gets absorption coefficient grid [np x n_nu] summing up all lines of a molecule
+    :param p: numpy array [np]
+    :param T: numpy array [np]
+    :param wavenumber_array: [n_nu]
+    :param molecule_name: string e.g. 'CO2'
+    :param molecule_data: if None, loads in data from file.
+    :param n_line_widths: integer, number of line widths to keep for each spectral line
+    """
     print('Loading in HITRAN data for ' + molecule_name)
     if molecule_data is None:
         molecule_data = load_molecule_data(molecule_name)
@@ -225,8 +255,8 @@ def ozone_UV(wavenumber_array, p_array, T_array):
 
     :param wavenumber_array: numpy array [n_nu_IR]
         nu values in IR regime
-    :param p_array: numpy array
-    :param T_array: numpy array
+    :param p_array: numpy array [np]
+    :param T_array: numpy array [nT]
     :return:
         wavenumber_array [n_nu] and absorption grid [np x nT x n_nu]
     """
@@ -275,6 +305,17 @@ def ozone_UV(wavenumber_array, p_array, T_array):
 
 def make_table(molecule_name, p_array=table_p_values, T_array=table_T_values,
                dwavenumber=table_dnu, n_line_widths=1000, wavenumber_array=None):
+    """
+    Makes [np x nT x n_nu] absorption coefficient lookup table and saves it to LookupTableFolder
+
+    :param molecule_name: string e.g. 'CO2'
+    :param p_array: numpy array [np]
+    :param T_array: numpy array [nT]
+    :param dwavenumber: float
+    :param n_line_widths: integer, number of line widths to keep for each spectral line
+    :param wavenumber_array: numpy array [n_nu] or None.
+        If None, will work out range required to keep main lines.
+    """
     if isinstance(molecule_name, dict):
         molecule_data = molecule_name
         molecule_name = 'custom'
@@ -303,6 +344,13 @@ def make_table(molecule_name, p_array=table_p_values, T_array=table_T_values,
 
 
 def plot_absorption_coefficient(molecule_name, p_plot, T_plot):
+    """
+    Plot absorption coefficient vs wavenumber for a specific pressure and temperature
+
+    :param molecule_name: string e.g. 'CO2'
+    :param p_plot: float
+    :param T_plot: float
+    """
     output_file = LookupTableFolder + molecule_name + '.npy'
     dict = np.load(output_file, allow_pickle='TRUE').item()
     p_index = np.abs(dict['p'] - p_plot).argmin()
