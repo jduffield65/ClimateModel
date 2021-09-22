@@ -6,6 +6,8 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import inspect
 import numpy as np
 from math import ceil, floor
+import warnings
+warnings.filterwarnings("ignore", message="Attempted to set non-positive bottom ylim on a log-scaled axis.")
 
 
 def round_any(x, base, round_type='round'):
@@ -102,7 +104,7 @@ class Atmosphere:
             default: 1K.
         :param delta_temp_change: float, optional.
             If not converging, temp_change will be lowered by delta_temp_change.
-            default: 0.001K.
+            default: 0.01K.
         """
         self.nz = nz
         self.ny = ny
@@ -444,8 +446,8 @@ class Atmosphere:
         def animate(i, grey_world):
             '''What to do at each frame of animation'''
             ax.clear()
-            ax.plot(np.ones((grey_world.nz - 1, grey_world.ny)) * grey_world.T0, grey_world.p,
-                    label='Isothermal', color=sw_color)
+            ax.plot(T_plot[0], grey_world.p,
+                    label='Initial', color=sw_color)
             if T_eqb is not None:
                 if correct_solution and not grey_world.sw_tau_is_zero:
                     Teqb_label = r'Radiative Equilibrium, $\tau_{sw}\neq0$'

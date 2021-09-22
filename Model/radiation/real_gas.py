@@ -132,8 +132,8 @@ def transmission(p1, p2, p_all, nu_band, delta_nu_band, nu_all, tau):
 
 class RealGas(Atmosphere):
     def __init__(self, nz, ny, molecule_names, T_g=None, q_funcs=None, q_funcs_args=None, n_nu_bands=40,
-                 T_star=T_sun, R_star=R_sun, star_planet_dist=AU, albedo=0.3, temp_change=1, T_func=None,
-                 p_surface=p_surface_earth, p_toa=p_toa_earth):
+                 T_star=T_sun, R_star=R_sun, star_planet_dist=AU, albedo=0.3, temp_change=1, delta_temp_change=0.01,
+                 T_func=None, p_surface=p_surface_earth, p_toa=p_toa_earth):
         """
 
         :param nz: integer or 'auto'.
@@ -174,6 +174,9 @@ class RealGas(Atmosphere):
         :param temp_change: float, optional.
             Time step is found so that at least one level will have a temperature change equal to this.
             default: 1K.
+        :param delta_temp_change: float, optional.
+            If not converging, temp_change will be lowered by delta_temp_change.
+            default: 0.01K.
         :param T_func: function, optional.
             Function to compute temperature profile given pressure as only argument.
             Useful if want to compute OLR for specific Temperature profile.
@@ -189,8 +192,11 @@ class RealGas(Atmosphere):
         self.star = {'T': T_star, 'R': R_star, 'star_planet_dist': star_planet_dist}
         F_stellar_constant = sigma * self.star['T'] ** 4 * self.star['R'] ** 2 / \
                              self.star['star_planet_dist'] ** 2
-        super().__init__(nz, ny, F_stellar_constant, albedo, p_surface, p_toa, temp_change)
+        super().__init__(nz, ny, F_stellar_constant, albedo, p_surface, p_toa, temp_change, delta_temp_change)
         if T_g is None:
+            if T_func is not None:
+                T_g = T_func(self.p_surface)
+                self.T_g = T_g
             # assume some greenhouse warming (Guess of ground temperature. Needed to work out pressure grid)
             self.T_g = self.T0 + 20
         else:
@@ -216,12 +222,12 @@ class RealGas(Atmosphere):
         for i in range(self.nz - 1):
             self.p[i, :] = np.mean(self.p_interface[i:i + 2, :], 0)
         if T_func is None:
-            self.T = np.ones_like(self.p) * self.T0
-            self.T_interface = np.ones_like(self.p_interface[:, 0]) * self.T0
+            self.T = np.ones_like(self.p) * self.T_g
+            T_interface = np.ones_like(self.p_interface[:, 0]) * self.T_g
         else:
             self.T = T_func(self.p)
-            self.T_interface = T_func(self.p_interface[:, 0])
-        self.tau_interface = optical_depth(self.p_interface[:, 0], self.T_interface, self.nu,
+            T_interface = T_func(self.p_interface[:, 0])
+        self.tau_interface = optical_depth(self.p_interface[:, 0], T_interface, self.nu,
                                            self.molecule_names, self.q_funcs, self.q_funcs_args)
         self.up_flux, self.down_flux = self.get_flux()
         self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
@@ -229,7 +235,6 @@ class RealGas(Atmosphere):
         if T_g is None:
             # update guess of ground temperature
             self.inital_Tg_guess()
-        delattr(self, 'T_interface') # only needed for tau calculation.
 
     def get_wavenumber_array(self, fract_to_ignore=0.001, fract_to_ignore_overlap=0.001):
         """
@@ -449,22 +454,25 @@ class RealGas(Atmosphere):
 
         def f(x):
             self.T_g = x
+            self.T = np.ones_like(self.p) * self.T_g
             self.up_flux, self.down_flux = self.get_flux()
             self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
                             np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
             return sum(self.net_flux)
 
         self.T_g = optimize.newton(f, self.T_g)
+        self.T = np.ones_like(self.p) * self.T_g
+        T_interface = np.ones_like(self.p_interface[:, 0]) * self.T_g
         # update wavenumber bands given new ground temperature (surface radiation now changed)
         self.nu, self.nu_lw, nu_overlap, self.nu_sw = self.get_wavenumber_array()
         self.nu_bands = self.get_wavenumber_bands(nu_overlap)
-        self.tau_interface = optical_depth(self.p_interface[:, 0], self.T_interface, self.nu,
+        self.tau_interface = optical_depth(self.p_interface[:, 0], T_interface, self.nu,
                                            self.molecule_names, self.q_funcs, self.q_funcs_args)
         self.up_flux, self.down_flux = self.get_flux()
         self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
                         np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
 
-    def find_Tg(self, flux_thresh=0.1, tol=0.01, convective_adjust=False):
+    def find_Tg(self, flux_thresh=0.1, tol=0.5, convective_adjust=False):
         """
         finds ground temperature such that net flux at top of atmosphere is approximately less than tol
 
