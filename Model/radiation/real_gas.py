@@ -1,6 +1,6 @@
 from .real_gas_data.hitran import LookupTableFolder
 from ..constants import h_planck, speed_of_light, k_boltzmann, g, T_sun, R_sun, AU, p_surface_earth, p_toa_earth, sigma
-from .real_gas_data.specific_humidity import molecules
+from .real_gas_data.specific_humidity import molecules, ppmv_from_humidity
 from .base import Atmosphere, round_any
 import numpy as np
 from math import ceil
@@ -204,12 +204,18 @@ class RealGas(Atmosphere):
         self.molecule_names = molecule_names
         if q_funcs is None:
             q_funcs = {}
-            q_funcs_args = {}
+            q_funcs_args0 = {}
             for molecule_name in molecule_names:
                 q_funcs[molecule_name] = molecules[molecule_name]['q']
-                q_funcs_args[molecule_name] = molecules[molecule_name]['q_args']
+                q_funcs_args0[molecule_name] = molecules[molecule_name]['q_args']
         self.q_funcs = q_funcs
-        self.q_funcs_args = q_funcs_args
+        if q_funcs_args is None:
+            self.q_funcs_args = q_funcs_args0
+        elif sum([list(q_funcs_args.keys())[i] == list(q_funcs.keys())[i] for i in range(len(q_funcs))])\
+                == len(q_funcs):
+            self.q_funcs_args = q_funcs_args
+        else:
+            raise ValueError("Keys don't match in q_funcs and q_funcs_args")
         # get wavenumber spacing from absorption coefficient data. Assume same for all molecules
         absorb_coef_nu = np.load(LookupTableFolder + molecule_names[0] + '.npy',
                                  allow_pickle='TRUE').item()['nu']
@@ -599,7 +605,7 @@ class RealGas(Atmosphere):
         return up_flux, down_flux
 
     def take_time_step(self, t, T_initial=None, changing_tau=False, convective_adjust=False,
-                       net_flux_thresh=1e-7, net_flux_percentile=95):
+                       net_flux_thresh=1e-7, net_flux_percentile=95, conv_thresh=1e-5, conv_t_multiplier=5):
         """
         This finds the fluxes given the current temperature profile. It then finds a suitable time step through
         the function update_time_step. It will then update the temperature profile accordingly.
@@ -625,6 +631,12 @@ class RealGas(Atmosphere):
             delta_net_flux is the change in net flux of the percentile of the grid given by this.
             So 100 means max, lower gives some leeway to outliers.
             default: 95.
+        :param conv_thresh: float, optional.
+            if MaxTendInd is in convective region, multiply timestep by conv_t_multiplier
+            convective if temperature difference between pre and post convective_adjustment is above conv_thresh
+            default: 1e-5 K
+        :param conv_t_multiplier: float, optional.
+            default: 5
         :return:
         t: time after current time step.
         delta_net_flux: difference in net flux between time steps. Lower means reaching convergence.
@@ -637,7 +649,8 @@ class RealGas(Atmosphere):
                    np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
         # net_lw_flux should be zero everywhere in equilibrium
         t, delta_net_flux = self.update_temp(t, net_flux.reshape(-1, 1), changing_tau, convective_adjust,
-                                             net_flux_thresh, net_flux_percentile)
+                                             net_flux_thresh, net_flux_percentile, conv_thresh=conv_thresh,
+                                             conv_t_multiplier=conv_t_multiplier)
         return t, delta_net_flux
 
     def save_data(self, data_dict, t):
@@ -662,9 +675,52 @@ class RealGas(Atmosphere):
             data_dict['flux']['lw_down'].append(np.sum(self.down_flux[:, lw] * self.nu_bands['delta'][lw], axis=1))
             data_dict['flux']['sw_up'].append(np.sum(self.up_flux[:, sw] * self.nu_bands['delta'][sw], axis=1))
             data_dict['flux']['sw_down'].append(np.sum(self.down_flux[:, sw] * self.nu_bands['delta'][sw], axis=1))
+        if "q" in data_dict:
+            for molecule_name in data_dict['q'].keys():
+                q_molecule = self.q_funcs[molecule_name](self.p[:, 0], *self.q_funcs_args[molecule_name])
+                data_dict['q'][molecule_name].append(ppmv_from_humidity(q_molecule, molecule_name))
         return data_dict
 
-    def plot_olr(self, olr_label='Top of atmosphere'):
+    def evolve_change_compos(self, T_g, q_args, data_dict=None, flux_thresh=1e-3,
+                             convective_adjust=False, t_end=2.0):
+        """
+        Given a sequence of ground temperatures and compositions, this will evolve to equilibrium at each
+        then discontinuosly change the composition and ground temperature and then evolve to equilibrium again.
+
+        :param T_g: list
+        :param q_args: list of dictionaries
+        :param data_dict: dictionary
+        :param flux_thresh:
+        :param convective_adjust:
+        :param t_end:
+        :return:
+        """
+        """Initialise atmosphere with first values given"""
+        self.T_g = T_g[0]
+        self.T = np.ones_like(self.p) * self.T_g
+        # update wavenumber bands given new ground temperature (surface radiation now changed)
+        # keep these bands for rest of simulation
+        self.nu, self.nu_lw, nu_overlap, self.nu_sw = self.get_wavenumber_array()
+        self.nu_bands = self.get_wavenumber_bands(nu_overlap)
+        T_interface = np.ones_like(self.p_interface[:, 0]) * self.T_g
+        self.q_funcs_args = q_args[0]
+        self.tau_interface = optical_depth(self.p_interface[:, 0], T_interface, self.nu,
+                                           self.molecule_names, self.q_funcs, self.q_funcs_args)
+        self.up_flux, self.down_flux = self.get_flux()
+        self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
+                        np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
+        for i in range(len(T_g)):
+            print('Composition ' + str(i+1) + '/' + str(len(T_g)))
+            self.T_g = T_g[i]
+            self.q_funcs_args = q_args[i]
+            self.tau_interface = optical_depth(self.p_interface[:, 0], T_interface, self.nu,
+                                               self.molecule_names, self.q_funcs, self.q_funcs_args)
+            data_dict = self.evolve_to_equilibrium(data_dict, flux_thresh=flux_thresh,
+                                                   convective_adjust=convective_adjust, t_end=t_end)
+            self.time_step_info['DeltaT'] = self.time_step_info['MaxDeltaT']  # to stop slow start to next iteration.
+        return data_dict
+
+    def plot_olr(self, olr_label='Top of atmosphere', ax=None):
         """
         Plots flux emitted by surface in long wave regime (uses integral in flux calc).
         Also plots upward flux in long wave regime at top of atmosphere (Outgoing longwave radiation OLR).
@@ -672,7 +728,8 @@ class RealGas(Atmosphere):
         :return: ax so can add new lines.
         """
         surface_up_flux = B_wavenumber(self.nu_lw, self.T_g) * np.pi
-        fig, ax = plt.subplots(1, 1)
+        if ax is None:
+            fig, ax = plt.subplots(1, 1)
         ax.plot(self.nu_lw, surface_up_flux, color='k', label='$T_g={:.0f}$K blackbody'.format(self.T_g))
         bands_use = self.nu_bands['sw'] == False
         bands_use[np.where(bands_use == False)[0][0]] = True # add extra band so not cut off before end of axis
@@ -685,9 +742,8 @@ class RealGas(Atmosphere):
         ax.set_ylabel('Flux Density ((W/m$^2$)/cm$^{-1}$)')
         ax.legend()
         ax.set_title('Upward Planetary Radiation')
-        return ax
 
-    def plot_incoming_short_wave(self, sw_label='Surface'):
+    def plot_incoming_short_wave(self, sw_label='Surface', ax=None):
         """
         Plots incoming radiation at top of atmosphere in short wave regime (no integral in flux calc).
         Also plots downward flux in short wavenumber regime at surface.
@@ -698,7 +754,8 @@ class RealGas(Atmosphere):
             return B_wavenumber(nu, self.star['T']) * np.pi * \
                    self.star['R'] ** 2 / self.star['star_planet_dist'] ** 2 * (1 - self.albedo) / 4
         toa_flux = solar_flux(self.nu_sw)
-        fig, ax = plt.subplots(1, 1)
+        if ax is None:
+            fig, ax = plt.subplots(1, 1)
         ax.plot(self.nu_sw, toa_flux, color='k', label='Top of atmosphere')
         bands_use = self.nu_bands['sw']
         ax.scatter(self.nu_bands['centre'][bands_use],
@@ -710,4 +767,6 @@ class RealGas(Atmosphere):
         ax.set_ylabel('Flux Density ((W/m$^2$)/cm$^{-1}$)')
         ax.legend()
         ax.set_title('Downward Solar Radiation')
-        return ax
+
+    def __str__(self):
+        return 'Real Gas'

@@ -4,7 +4,7 @@ from itertools import groupby
 from operator import itemgetter
 
 
-def convective_adjustment(p, T, lapserate=g/c_p_dry):
+def convective_adjustment(p, T, lapserate=g/c_p_dry, delta_T_thresh='auto'):
     """
     Just runs function convective_adjustment_single for each latitude.
 
@@ -33,7 +33,7 @@ def convective_adjustment(p, T, lapserate=g/c_p_dry):
     return T
 
 
-def convective_adjustment_single(p, T, lapserate=g/c_p_dry):
+def convective_adjustment_single(p, T, lapserate=g/c_p_dry, delta_T_thresh='auto'):
     """
     Changes temperature profile wherever dT/dz < -lapserate so
     convective stability dT/dz >= -lapserate is reached everywhere.
@@ -45,16 +45,23 @@ def convective_adjustment_single(p, T, lapserate=g/c_p_dry):
     :param lapserate: desired lapse rate, optional.
         lapserate = -dT/dz in units of K/m
         default: g/c_p_dry i.e. dry adiabat
+    :param delta_T_thresh: float
+        if change in temperature due to convective adjustment changes temperature by more than this
+        that unstable group will be ignored.
+        default: 'auto' meaning median(T)/4
     :return:
         new Temperature profile
     """
+    if delta_T_thresh == 'auto':
+        delta_T_thresh = np.median(T)/4.0
     p_reference = p_surface_earth
     alpha = R_specific * lapserate / g
     theta = get_theta(T, p, p_reference, alpha)
     theta_diff = np.ediff1d(theta)
     theta_diff = np.concatenate((theta_diff, [theta_diff[-1]]))
     small = 1e-10  # so don't repeat with tiny increase
-    unstable_levels = np.where(theta_diff < -small)[0] # negative as pressure is decreasing.
+    unstable_levels = np.where(theta_diff < -small)[0]  # negative as pressure is decreasing.
+    levels_to_ignore = []
     while len(unstable_levels) > 0:
         enthalpy = get_enthalpy(T, p)
         unstable_groups = []
@@ -95,12 +102,18 @@ def convective_adjustment_single(p, T, lapserate=g/c_p_dry):
             # combine upper and lower profiles as to conserve energy
             beta = (enthalpy - adjust_theta['lower']['enthalpy']) / (
                     adjust_theta['upper']['enthalpy'] - adjust_theta['lower']['enthalpy'])
-            T = beta * adjust_theta['upper']['T'] + (1-beta) * adjust_theta['lower']['T']
+            new_T = beta * adjust_theta['upper']['T'] + (1-beta) * adjust_theta['lower']['T']
+            if abs((new_T - T)).max() < delta_T_thresh:
+                T = new_T
+            else:
+                # if large temperature change, ignore this group.
+                levels_to_ignore = levels_to_ignore + unstable_group
             # update theta for next iteration.
             theta = get_theta(T, p, p_reference, alpha)
         theta_diff = np.ediff1d(theta)
         theta_diff = np.concatenate((theta_diff, [theta_diff[-1]]))
         unstable_levels = np.where(theta_diff < -small)[0]  # negative as pressure is decreasing.
+        unstable_levels = np.setdiff1d(unstable_levels, levels_to_ignore)
 
     return T
 

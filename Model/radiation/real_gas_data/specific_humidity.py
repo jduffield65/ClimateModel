@@ -12,6 +12,7 @@ Figure 4 used to convert between altitude and pressure.
 import numpy as np
 from ...constants import p_surface_earth
 from scipy.interpolate import interp1d
+
 M_air = 28.97  # molar mass of air in gmol^-1
 
 
@@ -27,7 +28,7 @@ def p_altitude_convert(altitude=None, p=None):
     p1_log = np.log10(p_surface_earth)
     h2 = 90000.0
     p2_log = -1.0
-    gradient = (p2_log - p1_log) / (h2-h1)
+    gradient = (p2_log - p1_log) / (h2 - h1)
     # above 90km, assume linear correspondence
     h3 = 130000.0
     p3_log = -3.0
@@ -36,7 +37,7 @@ def p_altitude_convert(altitude=None, p=None):
         log_p = np.zeros_like(altitude, dtype=float)
         log_p[altitude <= h2] = p1_log + gradient * altitude[altitude <= h2]
         log_p[altitude > h2] = p2_log + gradient2 * (altitude[altitude > h2] - h2)
-        return 10**log_p
+        return 10 ** log_p
     elif altitude is None:
         log_p = np.log10(p)
         altitude = np.zeros_like(p, dtype=float)
@@ -54,6 +55,17 @@ def humidity_from_ppmv(conc_ppmv, molecule_name):
     :param molecule_name: string e.g. 'CO2'
     """
     return conc_ppmv / 10 ** 6 * molecules[molecule_name]['M'] / M_air
+
+
+def ppmv_from_humidity(humidity, molecule_name):
+    """
+    Given specific humidity (kg / kg),
+     molar concentration in parts per million by volume is returned
+
+    :param humidity: numpy array
+    :param molecule_name: string e.g. 'CO2'
+    """
+    return humidity * 10 ** 6 * M_air / molecules[molecule_name]['M']
 
 
 def co2(p, q_surface=370, h_change=80000):
@@ -91,8 +103,8 @@ def ch4(p, scale_factor=1):
     """Get interpolation function from data"""
     h_values = np.array([0, 10, 17, 22, 28, 50, 68, 80, 90]) * 1000
     q_values = np.array([1.75, 1.75, 1.68, 1.32, 1.19, 0.4, 0.19, 0.04, 0])
-    mod_factor = abs(scale_factor-1) * (h_values[-1]-h_values)/h_values[-1]
-    mod_factor = 1 + np.sign(scale_factor-1) * mod_factor
+    mod_factor = abs(scale_factor - 1) * (h_values[-1] - h_values) / h_values[-1]
+    mod_factor = 1 + np.sign(scale_factor - 1) * mod_factor
     q_values = q_values * mod_factor
     q_values[1] = q_values[0]  # to maintain constant value up to certain h
     q_values[q_values > q_values[0]] = q_values[0]  # to keep maxima at surface
@@ -119,15 +131,15 @@ def h2o(p, scale_factor=1):
     # ppmv values from plot in paper
     h_values = np.arange(0, 90, 5) * 1000
     q_values = np.array([20000, 2500, 250, 12, 4, 4.3, 4.9, 5.1, 5.7, 5.9, 6, 6.1, 6, 5.8, 5, 4, 2.5, 1])
-    mod_factor = abs(scale_factor-1) * (h_values[-1]-h_values)/h_values[-1]
-    mod_factor = 1 + np.sign(scale_factor-1) * mod_factor
+    mod_factor = abs(scale_factor - 1) * (h_values[-1] - h_values) / h_values[-1]
+    mod_factor = 1 + np.sign(scale_factor - 1) * mod_factor
     q_values = q_values * mod_factor
     q_values[q_values > q_values[0]] = q_values[0]  # to keep maxima at surface
     interp_func = interp1d(h_values, np.log10(q_values))
     """interpolate given pressure values"""
     h = p_altitude_convert(p=p)
     q = np.zeros_like(p)
-    q[h < h_values.max()] = 10**interp_func(h[h < h_values.max()])
+    q[h < h_values.max()] = 10 ** interp_func(h[h < h_values.max()])
     q[q < 0] = 0
     q = humidity_from_ppmv(q, 'H2O')
     return q

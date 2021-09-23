@@ -624,6 +624,9 @@ class GreyGas:
             ax[2].plot(-down_lw_no_sw / F_norm, no_sw_world.p_interface, color=lw_color, linestyle='dotted')
         ax[2].legend()
 
+    def __str__(self):
+        return 'Grey Gas'
+
     def plot_animate(self, T_array, t_array, T_eqb=None, correct_solution=True, tau_array=None, flux_array=None,
                      log_axis=True, nPlotFrames=100, fract_frames_at_start=0.25, start_step=3, show_last_frame=False):
         """
