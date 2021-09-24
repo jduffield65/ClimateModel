@@ -80,14 +80,17 @@ def co2(p, q_surface=370, h_change=80000):
     :return: q
     """
     h = p_altitude_convert(p=p)
-    q = np.ones_like(p) * q_surface
-    h_toa = 120000
-    q_toa = 60
-    gradient = (q_surface - q_toa) / (h_change - h_toa)
-    intercept = q_surface - gradient * h_change
-    q[h > h_change] = intercept + gradient * h[h > h_change]
-    q[q < 0] = 0
-    q = humidity_from_ppmv(q, 'CO2')
+    if q_surface == 0:
+        q = np.zeros_like(p)
+    else:
+        q = np.ones_like(p) * q_surface
+        h_toa = 120000
+        q_toa = 60
+        gradient = (q_surface - q_toa) / (h_change - h_toa)
+        intercept = q_surface - gradient * h_change
+        q[h > h_change] = intercept + gradient * h[h > h_change]
+        q[q < 0] = 0
+        q = humidity_from_ppmv(q, 'CO2')
     return q
 
 
@@ -103,18 +106,22 @@ def ch4(p, scale_factor=1):
     """Get interpolation function from data"""
     h_values = np.array([0, 10, 17, 22, 28, 50, 68, 80, 90]) * 1000
     q_values = np.array([1.75, 1.75, 1.68, 1.32, 1.19, 0.4, 0.19, 0.04, 0])
-    mod_factor = abs(scale_factor - 1) * (h_values[-1] - h_values) / h_values[-1]
-    mod_factor = 1 + np.sign(scale_factor - 1) * mod_factor
+    # mod_factor = abs(scale_factor - 1) * (h_values[-1] - h_values) / h_values[-1]
+    # mod_factor = 1 + np.sign(scale_factor - 1) * mod_factor
+    mod_factor = scale_factor
     q_values = q_values * mod_factor
-    q_values[1] = q_values[0]  # to maintain constant value up to certain h
-    q_values[q_values > q_values[0]] = q_values[0]  # to keep maxima at surface
-    interp_func = interp1d(h_values, q_values)
-    """interpolate given pressure values"""
-    h = p_altitude_convert(p=p)
-    q = np.zeros_like(p)
-    q[h < h_values.max()] = interp_func(h[h < h_values.max()])
-    q[q < 0] = 0
-    q = humidity_from_ppmv(q, 'CH4')
+    if scale_factor == 0:
+        q = np.zeros_like(p)
+    else:
+        q_values[1] = q_values[0]  # to maintain constant value up to certain h
+        q_values[q_values > q_values[0]] = q_values[0]  # to keep maxima at surface
+        interp_func = interp1d(h_values, q_values)
+        """interpolate given pressure values"""
+        h = p_altitude_convert(p=p)
+        q = np.zeros_like(p)
+        q[h < h_values.max()] = interp_func(h[h < h_values.max()])
+        q[q < 0] = 0
+        q = humidity_from_ppmv(q, 'CH4')
     return q
 
 
@@ -131,17 +138,21 @@ def h2o(p, scale_factor=1):
     # ppmv values from plot in paper
     h_values = np.arange(0, 90, 5) * 1000
     q_values = np.array([20000, 2500, 250, 12, 4, 4.3, 4.9, 5.1, 5.7, 5.9, 6, 6.1, 6, 5.8, 5, 4, 2.5, 1])
-    mod_factor = abs(scale_factor - 1) * (h_values[-1] - h_values) / h_values[-1]
-    mod_factor = 1 + np.sign(scale_factor - 1) * mod_factor
-    q_values = q_values * mod_factor
-    q_values[q_values > q_values[0]] = q_values[0]  # to keep maxima at surface
-    interp_func = interp1d(h_values, np.log10(q_values))
-    """interpolate given pressure values"""
-    h = p_altitude_convert(p=p)
-    q = np.zeros_like(p)
-    q[h < h_values.max()] = 10 ** interp_func(h[h < h_values.max()])
-    q[q < 0] = 0
-    q = humidity_from_ppmv(q, 'H2O')
+    # mod_factor = abs(scale_factor - 1) * (h_values[-1] - h_values) / h_values[-1]
+    # mod_factor = 1 + np.sign(scale_factor - 1) * mod_factor
+    mod_factor = scale_factor
+    if scale_factor == 0:
+        q = np.zeros_like(p)
+    else:
+        q_values = q_values * mod_factor
+        q_values[q_values > q_values[0]] = q_values[0]  # to keep maxima at surface
+        interp_func = interp1d(h_values, np.log10(q_values))
+        """interpolate given pressure values"""
+        h = p_altitude_convert(p=p)
+        q = np.zeros_like(p)
+        q[h < h_values.max()] = 10 ** interp_func(h[h < h_values.max()])
+        q[q < 0] = 0
+        q = humidity_from_ppmv(q, 'H2O')
     return q
 
 
@@ -157,14 +168,18 @@ def o3(p, scale_factor=1):
     h_values = np.sort(np.concatenate((np.arange(0, 125, 5), np.array([32, 78, 92])))) * 1000
     q_values = np.array([0.05, 0.07, 0.09, 0.25, 1.8, 5.25, 7.8, 7.9, 7.85, 6, 3.8, 2.4, 1.6, 1, 0.75, 0.3, 0.15, 0.1,
                          0.15, 0.8, 1.75, 1.8, 1.7, 1, 0.3, 0.07, 0.05, 0])
-    q_values[3:-3] = q_values[3:-3] * scale_factor
-    interp_func = interp1d(h_values, q_values)
-    """interpolate given pressure values"""
-    h = p_altitude_convert(p=p)
-    q = np.zeros_like(p)
-    q[h < h_values.max()] = interp_func(h[h < h_values.max()])
-    q[q < 0] = 0
-    q = humidity_from_ppmv(q, 'O3')
+    if scale_factor == 0:
+        q = np.zeros_like(p)
+    else:
+        # q_values[3:-3] = q_values[3:-3] * scale_factor
+        q_values = q_values * scale_factor
+        interp_func = interp1d(h_values, q_values)
+        """interpolate given pressure values"""
+        h = p_altitude_convert(p=p)
+        q = np.zeros_like(p)
+        q[h < h_values.max()] = interp_func(h[h < h_values.max()])
+        q[q < 0] = 0
+        q = humidity_from_ppmv(q, 'O3')
     return q
 
 

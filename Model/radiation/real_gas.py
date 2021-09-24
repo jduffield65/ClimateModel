@@ -720,21 +720,23 @@ class RealGas(Atmosphere):
             self.time_step_info['DeltaT'] = self.time_step_info['MaxDeltaT']  # to stop slow start to next iteration.
         return data_dict
 
-    def plot_olr(self, olr_label='Top of atmosphere', ax=None):
+    def plot_olr(self, olr_label='Top of atmosphere', ax=None, show_bands=True):
         """
         Plots flux emitted by surface in long wave regime (uses integral in flux calc).
         Also plots upward flux in long wave regime at top of atmosphere (Outgoing longwave radiation OLR).
         :param olr_label: label to give top of atmosphere flux.
-        :return: ax so can add new lines.
+        :param ax: if want to add to existing plot, give ax.
+        :param show_bands: if true, will put a scatter point at the centre of each wavenumber band.
         """
         surface_up_flux = B_wavenumber(self.nu_lw, self.T_g) * np.pi
         if ax is None:
             fig, ax = plt.subplots(1, 1)
         ax.plot(self.nu_lw, surface_up_flux, color='k', label='$T_g={:.0f}$K blackbody'.format(self.T_g))
         bands_use = self.nu_bands['sw'] == False
-        bands_use[np.where(bands_use == False)[0][0]] = True # add extra band so not cut off before end of axis
-        ax.scatter(self.nu_bands['centre'][bands_use],
-                   B_wavenumber(self.nu_bands['centre'][bands_use], self.T_g) * np.pi, color='k', s=10)
+        bands_use[np.where(bands_use == False)[0][0]] = True  # add extra band so not cut off before end of axis
+        if show_bands:
+            ax.scatter(self.nu_bands['centre'][bands_use],
+                       B_wavenumber(self.nu_bands['centre'][bands_use], self.T_g) * np.pi, color='k', s=10)
         ax.plot(self.nu_bands['centre'][bands_use], self.up_flux[0, bands_use], label=olr_label)
         ax.set_xlim((0, round_any(self.nu_lw.max(), 500, 'ceil')))
         ax.set_ylim((0, round_any(surface_up_flux.max(), 0.05, 'ceil')))
@@ -743,12 +745,13 @@ class RealGas(Atmosphere):
         ax.legend()
         ax.set_title('Upward Planetary Radiation')
 
-    def plot_incoming_short_wave(self, sw_label='Surface', ax=None):
+    def plot_incoming_short_wave(self, sw_label='Surface', ax=None, show_bands=True):
         """
         Plots incoming radiation at top of atmosphere in short wave regime (no integral in flux calc).
         Also plots downward flux in short wavenumber regime at surface.
         :param sw_label: label to give surface flux.
-        :return: ax so can add new lines.
+        :param ax: if want to add to existing plot, give ax.
+        :param show_bands: if true, will put a scatter point at the centre of each wavenumber band.
         """
         def solar_flux(nu):
             return B_wavenumber(nu, self.star['T']) * np.pi * \
@@ -758,8 +761,9 @@ class RealGas(Atmosphere):
             fig, ax = plt.subplots(1, 1)
         ax.plot(self.nu_sw, toa_flux, color='k', label='Top of atmosphere')
         bands_use = self.nu_bands['sw']
-        ax.scatter(self.nu_bands['centre'][bands_use],
-                   solar_flux(self.nu_bands['centre'][bands_use]), color='k', s=10)
+        if show_bands:
+            ax.scatter(self.nu_bands['centre'][bands_use],
+                       solar_flux(self.nu_bands['centre'][bands_use]), color='k', s=10)
         ax.plot(self.nu_bands['centre'][bands_use], self.down_flux[-1, bands_use], label=sw_label)
         ax.set_xlim((0, round_any(self.nu_sw.max(), 10000, 'ceil')))
         ax.set_ylim((0, round_any(toa_flux.max(), 0.005, 'ceil')))

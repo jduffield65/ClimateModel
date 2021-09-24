@@ -341,7 +341,7 @@ class Animate:
                 self.plot2_info['ax_compos'].set_xlabel(r'$\tau$')
             else:
                 # log scale if plotting q
-                self.plot2_info['ax_compos'].set_xlabel('Volume Mixing Ration (ppmv)')
+                self.plot2_info['ax_compos'].set_xlabel('Volume Mixing Ratio (ppmv)')
                 self.plot2_info['ax_compos'].set_xscale('log')
             self.plot2_info['ax_compos'].set_xlim(self.ax_lims['compos'])
             if self.log_axis:

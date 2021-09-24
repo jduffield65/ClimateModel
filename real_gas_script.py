@@ -8,18 +8,20 @@ from scipy import optimize
 import numpy as np
 matplotlib.use('TkAgg')
 
-conv_adjust = True
+conv_adjust = False
 molecule_names = ['CO2', 'CH4', 'H2O', 'O3']
+# molecule_names = ['single_line']
 
 """Making hitran absorption coef data"""
 # # get data for toy gas with just one wide strong single line centered at peak of black body spectrum
-# single_line_data = {'nu': np.array([520]), 'sw': np.array([500.0]), 'gamma_air': np.array([0.1]),
+# single_line_data = {'nu': np.array([525]), 'sw': np.array([500.0]), 'gamma_air': np.array([0.1]),
 #                     'n_air': np.array([0.7])}
 # hitran.make_table(single_line_data, wavenumber_array=np.arange(320, 722, 10, dtype=float),
 #                   p_array=np.array([hitran.p_reference], dtype=float),
 #                   T_array=np.array([hitran.T_reference], dtype=float))
 # # hitran.make_table('CH4')
-# ax = hitran.plot_absorption_coefficient('custom', hitran.p_reference, 270)
+# hitran.make_table('CO2', wavenumber_array=np.arange(0, 1505, 10, dtype=float))  # no short wave CO2
+# ax = hitran.plot_absorption_coefficient('single_line', hitran.p_reference, 270)
 # plt.show()
 
 """Evolving CO2 conc - finding list of ground temp eqb"""
@@ -40,11 +42,11 @@ molecule_names = ['CO2', 'CH4', 'H2O', 'O3']
 """"""
 # gas = RealGas(nz=50, ny=1, molecule_names=molecule_names, temp_change=1, delta_temp_change=0.1)
 # T_g = gas.find_Tg(convective_adjust=conv_adjust)
-T_g = 302.93
+T_g = 265.19
 gas = RealGas(nz='auto', ny=1, molecule_names=molecule_names, T_g=T_g, p_toa=0.1, temp_change=1, delta_temp_change=0.1)
 # # different for single_line as specify q
 # gas = RealGas(nz='auto', ny=1, molecule_names=molecule_names, T_g=T_g, q_funcs={'single_line': humidity.co2},
-#               q_funcs_args={'single_line': ()})
+#               q_funcs_args={'single_line': ()}, delta_temp_change=0.1)
 flux_dict = {'lw_up': [], 'lw_down': [], 'sw_up': [], 'sw_down': []}
 # q_dict = {'CO2': [], 'CH4': [], 'H2O': [], 'O3': []}
 data = {'t': [], 'T': [], 'flux': flux_dict}  # , 'q': q_dict}
