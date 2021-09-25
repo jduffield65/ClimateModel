@@ -7,6 +7,8 @@ from math import ceil
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d, InterpolatedUnivariateSpline
 from scipy import optimize
+import os
+import contextlib
 
 
 def B_freq(freq, T):
@@ -472,7 +474,7 @@ class RealGas(Atmosphere):
         self.net_flux = np.sum(self.up_flux * self.nu_bands['delta'], axis=1) - \
                         np.sum(self.down_flux * self.nu_bands['delta'], axis=1)
 
-    def find_Tg(self, flux_thresh=0.1, tol=0.5, convective_adjust=False):
+    def find_Tg(self, flux_thresh=0.1, tol=0.5, convective_adjust=False, print_eqb_info=True):
         """
         finds ground temperature such that net flux at top of atmosphere is approximately less than tol
 
@@ -483,6 +485,9 @@ class RealGas(Atmosphere):
             default: 0.1
         :param convective_adjust: boolean, optional.
             Whether the temperature profile should adjust to stay stable with respect to convection.
+            default: False
+        :param print_eqb_info: boolean, optional.
+            Whether to print approach to equilibrium info for each iteration.
             default: False
         :return: T_g
         """
@@ -496,8 +501,11 @@ class RealGas(Atmosphere):
             self.T_g = x
             _ = self.evolve_to_equilibrium(flux_thresh=flux_thresh, save=False, convective_adjust=convective_adjust)
             return self.net_flux[0]
-
-        root = optimize.newton(f, self.T_g, tol=tol)
+        if print_eqb_info:
+            root = optimize.newton(f, self.T_g, tol=tol)
+        else:
+            with open(os.devnull, "w") as f_print, contextlib.redirect_stdout(f_print):
+                root = optimize.newton(f, self.T_g, tol=tol)
         return root[0]
 
     def flux_integrals(self, j, T_interface):

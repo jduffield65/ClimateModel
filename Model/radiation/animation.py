@@ -337,7 +337,7 @@ class Animate:
         if self.compos_plot is not None:
             self.plot2_info['ax_compos'].clear()
             for key in self.compos_plot:
-                self.plot2_info['ax_compos'].plot(self.compos_plot[key], self.atmos.p, label=key)
+                self.plot2_info['ax_compos'].plot(self.compos_plot[key][i], self.atmos.p[:, 0], label=key)
             if self.q_array is None:
                 self.plot2_info['ax_compos'].set_xlabel(r'$\tau$')
             else:

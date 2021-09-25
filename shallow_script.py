@@ -105,13 +105,13 @@ ny = int(round(15 * L_def / dy))
 courant_target = 0.01
 dt = courant_target * dx / c
 r = 1 / (10 * 30 * 24 * 60 ** 2)  # damping time scale of 16 months
-n_days = 1600.0
+n_days = 25.00
 save_every = 24*60**2
 y_walls_damp = {'dist_thresh': (ny/2)*dy-6*dy, 'r': r * 100}
 boundary_type = {'x': 'walls', 'y': 'walls', 'y_walls_damp': y_walls_damp}
 h_perturb = h_mean / 10
 linear = False
-wind_dict = {'type': 'seasonal_forced'}
+wind_dict = {'type': 'forced'}
 initial_info = {'type': 'el_nino', 'max_h_surface': h_mean+h_perturb, 'min_h_surface': h_mean-h_perturb,
                 'y_std': L_def, 'add_noise': False, 'wind': wind_dict}
 
