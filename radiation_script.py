@@ -2,10 +2,11 @@ import matplotlib.pyplot as plt
 import Model.radiation.grey
 import matplotlib
 import numpy as np
-from Model.constants import p_surface, F_sun
+from Model.constants import p_surface_earth, F_sun
 from matplotlib.animation import FuncAnimation
 import Model.radiation.grey_optical_depth as od
 from Model.radiation.ice_albedo_feedback import GreyAlbedoFeedback
+from Model.radiation.animation import Animate
 
 matplotlib.use('TkAgg')  # To make plot pop out
 
@@ -32,7 +33,7 @@ conv_adjust = False
 # grey_world = Model.radiation.grey.GreyGas(nz='auto', ny=ny, tau_lw_func=od.scale_height_and_peak_in_atmosphere,
 #                                           tau_lw_func_args=[51000, 4, 100, 600, 0.1],
 #                                           tau_sw_func=od.scale_height_and_peak_in_atmosphere,
-#                                           tau_sw_func_args=[p_surface, 0.12, 100, 20, 0.002])
+#                                           tau_sw_func_args=[p_surface_earth, 0.12, 100, 20, 0.002])
 
 """ Approach to equilibrium"""
 # if grey_world.ny == 1:
@@ -44,14 +45,15 @@ conv_adjust = False
 # net_flux_thresh = 1e-1
 # data = grey_world.evolve_to_equilibrium(flux_thresh=net_flux_thresh, convective_adjust=conv_adjust)
 # if grey_world.ny == 1:
-#     anim = grey_world.plot_animate(data['T'], data['t'], T_eqb, correct_solution)
+#     anim = Animate(grey_world, data['T'], data['t'], T_eqb, correct_solution).anim
 # else:
-#     anim = grey_world.plot_animate(data['T'], data['t'], nPlotFrames=30)
+#     anim = Animate(grey_world, data['T'], data['t'], nPlotFrames=30).anim
+#     #anim = grey_world.plot_animate(data['T'], data['t'], nPlotFrames=30)
 # plt.show()
 
 """ Evolution with tau"""
 # p1 = od.get_exponential_p_width(1e-5)
-# p2 = od.get_exponential_p_width(1e-5 / 3, 2000)
+# p2 = od.get_exponential_p_width(1e-5 / 3)
 # tau_params_final = [100000, 6]
 # tau_params = [100000, 4]
 # p_max = 2000
@@ -65,7 +67,7 @@ conv_adjust = False
 # grey_world.tau_sw_func_args = tuple(tau_sw_params)
 # grey_world.update_grid()
 # up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, \
-# correct_solution = grey_world.equilibrium_sol(convective_adjust=conv_adjust)
+#     correct_solution = grey_world.equilibrium_sol(convective_adjust=conv_adjust)
 # t = 0
 # t_end = 10 * 365 * 24 * 60 ** 2
 # t_sw = t_end
@@ -89,7 +91,7 @@ conv_adjust = False
 #             t = data['t'][-1]
 #             t_sw = t
 #         # After equilibrium evolve sw optical depth
-#         tau_sw_params[2] = min(tau_sw_params[2] + 1e-2 * (t - t_sw) / grey_world.time_step_info['dt'],
+#         tau_sw_params[2] = min(tau_sw_params[2] + 1e-4 * (t - t_sw) / grey_world.time_step_info['dt'],
 #                                tau_sw_params_final[2])
 #         grey_world.tau_sw_func_args = tuple(tau_sw_params)
 #     if tau_sw_params[2] == tau_sw_params_final[2]:
@@ -102,11 +104,12 @@ conv_adjust = False
 #         grey_world.update_grid()
 #         data = grey_world.evolve_to_equilibrium(data, delta_net_flux_thresh, T_eqb.copy(),
 #                                                 convective_adjust=conv_adjust)
-#         t = t_end + 10 # once reached final equilibrium, end simulation
+#         t = t_end + 10  # once reached final equilibrium, end simulation
 #     else:
-#         t = grey_world.update_temp(t, T_eqb.copy(), changing_tau, convective_adjust=conv_adjust)[0]
+#         t = grey_world.take_time_step(t, T_eqb.copy(), changing_tau, convective_adjust=conv_adjust)[0]
 #         data = grey_world.save_data(data, t)
-# anim = grey_world.plot_animate(data['T'], data['t'], T_eqb, correct_solution, data['tau'], data['flux'], nPlotFrames=30)
+# #anim = grey_world.plot_animate(data['T'], data['t'], T_eqb, correct_solution, data['tau'], data['flux'], nPlotFrames=30)
+# anim = Animate(grey_world, data['T'], data['t'], tau_array=data['tau'], flux_array=data['flux'], nPlotFrames=100)
 # plt.show()
 
 '''With stratosphere, evolve long wave to see if eventually get temp decrease'''
@@ -152,7 +155,7 @@ tau_surface_values = 4
 stellar_constant_values = np.arange(300, 2250, 50)
 ice_albedo_example = GreyAlbedoFeedback(tau_surface_values, stellar_constant_values, nz='auto', ny=ny,
                                                      tau_lw_func=od.scale_height,
-                                                     tau_lw_func_args=[0.22 * p_surface, 4],
+                                                     tau_lw_func_args=[0.22 * p_surface_earth, 4],
                                                      tau_sw_func=None,
                                                      tau_sw_func_args=None)
 albedo_array, ice_latitude, T_surface = ice_albedo_example.run(0.1, delta_net_flux_thresh=1e-3, conv_adjust=conv_adjust)

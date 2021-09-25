@@ -1,10 +1,13 @@
 import numpy as np
 from Model.radiation.grey import GreyGas
+from ..constants import p_surface_earth, p_toa_earth
 from .convective_adjustment import nearest_value_in_array
 from tqdm import tqdm
 import inspect
 import matplotlib.pyplot as plt
 from scipy.signal import convolve
+import os
+import contextlib
 
 
 def albedo_step_function(latitude, T_surface=None, albedo_no_ice=0.3, albedo_ice=0.6, T_ice=263):
@@ -37,7 +40,8 @@ def albedo_step_function(latitude, T_surface=None, albedo_no_ice=0.3, albedo_ice
 class GreyAlbedoFeedback:
     def __init__(self, tau_lw_surface_values, stellar_constant_values,
                  nz, ny, tau_lw_func, tau_lw_func_args, tau_sw_func=None,
-                 tau_sw_func_args=None, albedo=albedo_step_function):
+                 tau_sw_func_args=None, albedo=albedo_step_function,
+                 p_surface=p_surface_earth, p_toa=p_toa_earth):
         """
 
         :param tau_lw_surface_values: numpy array or float
@@ -67,6 +71,12 @@ class GreyAlbedoFeedback:
             array of albedo values at each latitude. Function must also have albedo_no_ice, albedo_ice and T_ice
             as default arguments.
             default: albedo_step_function
+        :param p_surface: float, optional.
+            Pressure in Pa at surface.
+            default: p_surface_earth = 101320 Pa
+        :param p_toa: float, optional.
+            Pressure in Pa at top of atmosphere
+            default: p_toa_earth = 20 Pa
         """
 
         # albedo function must have albedo_no_ice, albedo_ice and T_ice as default arguments. Obtain them.
@@ -99,7 +109,8 @@ class GreyAlbedoFeedback:
 
         # Initialise gas with no ice albedo as start with warmest scenario which we assume is ice free.
         self.grey_world = GreyGas(nz, ny, tau_lw_func, tau_lw_func_args,
-                                  tau_sw_func, tau_sw_func_args, F_stellar_constant, self.albedo_no_ice)
+                                  tau_sw_func, tau_sw_func_args, F_stellar_constant, self.albedo_no_ice,
+                                  p_surface=p_surface, p_toa=p_toa)
 
         # Get plotting latitude which includes 0
         if 0 in self.grey_world.latitude:
@@ -146,7 +157,7 @@ class GreyAlbedoFeedback:
                                                       convective_adjust=conv_adjust)
             update_albedo_values = np.where(self.grey_world.albedo != albedo_new)[0]
 
-    def run(self, delta_albedo=0.1, delta_net_flux_thresh=1e-3, conv_adjust=False):
+    def run(self, delta_albedo=0.1, delta_net_flux_thresh=1e-3, conv_adjust=False, print_eqb_info=False):
         """
         At each value of self.changing_param, we run to the equilibrium temperature profile.
         Then save the albedo, ice latitude and surface temperatures
@@ -158,8 +169,11 @@ class GreyAlbedoFeedback:
         :param delta_net_flux_thresh: float, optional.
             Threshold in delta_net_flux to achieve equilibrium
             default: 1e-3
-        :param convective_adjust: boolean, optional.
+        :param conv_adjust: boolean, optional.
             Whether the temperature profile should adjust to stay stable with respect to convection.
+            default: False
+        :param print_eqb_info: boolean, optional.
+            Whether to print approach to equilibrium info for each iteration of ice-albedo experiment.
             default: False
         :return:
             albedo_array, ice_latitude, T_surface
@@ -175,8 +189,11 @@ class GreyAlbedoFeedback:
                 self.grey_world.update_grid()
             elif self.changing_param == 'stellar':
                 self.grey_world.F_stellar_constant = self.changing_param_values[i]
-
-            self.update_albedo(delta_albedo, delta_net_flux_thresh, conv_adjust)
+            if print_eqb_info:
+                self.update_albedo(delta_albedo, delta_net_flux_thresh, conv_adjust)
+            else:
+                with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+                    self.update_albedo(delta_albedo, delta_net_flux_thresh, conv_adjust)
             albedo_array.append(self.grey_world.albedo.copy())
             ice_latitude.append(
                 min(np.concatenate((abs(self.latitude_plot)[self.grey_world.albedo == self.albedo_ice], [90]))))

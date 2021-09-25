@@ -18,19 +18,20 @@ dp = -g x rho_air x dz
 dtau = k x q x dp / g
 q = dtau/dp x (g/k)
 """
-
 import numpy as np
-from ..constants import p_surface, g
+from ..constants import p_surface_earth, g
 from sympy import symbols, lambdify, diff, exp, simplify, sympify, integrate, cancel, Function
 import inspect
 from sympy.solvers import solve
 
 
-def get_scale_height_alpha(p_width):
+def get_scale_height_alpha(p_width, p_surface):
     """
 
     :param p_width: difference between pressure value at surface and where
         mass concentration falls, q, falls to 1/e of q(p_max)
+    :param p_surface: float
+        Pressure value at the surface of the planet (Pa)
     :return:
     alpha: the larger alpha, the more peaked q and tau are about p_surface.
     """
@@ -43,7 +44,7 @@ def get_scale_height_alpha(p_width):
         return -1 / np.log(p_fall_value / p_surface)
 
 
-def scale_height(p, p_width=0.22 * p_surface, tau_surface=4, k=1):
+def scale_height(p, p_width=0.22 * p_surface_earth, tau_surface=4, p_surface=p_surface_earth, k=1):
     """
     method used in textbook, Atmospheric Circulation Dynamics and General Circulation Models.
     scale height of absorbing constituent is H/alpha, where H is scale height of pressure
@@ -57,11 +58,14 @@ def scale_height(p, p_width=0.22 * p_surface, tau_surface=4, k=1):
     :param tau_surface: float, optional.
         The value of optical depth at the surface.
         default: 4
+    :param p_surface: float, optional.
+        Pressure value at the surface of the planet (Pa)
+        default: p_surface_earth = 101320 Pa
     :param k: float, optional.
         Absorption coefficient for gas, units = m^2/kg
         default: 1
     """
-    alpha = get_scale_height_alpha(p_width)
+    alpha = get_scale_height_alpha(p_width, p_surface)
 
     def tau_func_sympy(p, tau_surface, alpha):
         return tau_surface * (p / p_surface) ** (alpha + 1)
@@ -79,9 +83,6 @@ def get_exponential_p_width(alpha):
     and small. Hence you know alpha and want to find p_fall_value.
     :param alpha: float.
         the larger alpha, the more peaked tau is about p_max.
-    :param p_max: float, optional.
-        Will differ from p_surface for peak_in_atmopsphere.
-        default: p_surface
     :return:
     p_width: Difference between p_max and pressure
         where mass concentration, q, falls to 1/e of q(p_surface)
@@ -89,13 +90,13 @@ def get_exponential_p_width(alpha):
     return 1 / alpha
 
 
-def get_exponential_alpha(p_width, p_max=p_surface):
+def get_exponential_alpha(p_width, p_max=p_surface_earth):
     """
 
     :param p_width: Difference between pressure at surface
         and where mass concentration, q, falls to 1/e of q(p_surface)
     :param p_max: pressure level where mass concentration, q is peaked.
-        default: p_surface
+        default: p_surface_earth = 101320 Pa
     :return:
     alpha: the larger alpha, the more peaked q is about p_max.
     """
@@ -105,7 +106,7 @@ def get_exponential_alpha(p_width, p_max=p_surface):
     return 1 / (p_max - p_fall_value)
 
 
-def exponential(p, p_width=0.22 * p_surface, tau_surface=4, k=1):
+def exponential(p, p_width=0.22 * p_surface_earth, tau_surface=4, p_surface=p_surface_earth, k=1):
     """
     Optical depth falls off exponentially as pressure decreases.
     Can use this method to get an analytic solution with a short wave contribution.
@@ -115,15 +116,18 @@ def exponential(p, p_width=0.22 * p_surface, tau_surface=4, k=1):
     :param p_width: float, optional.
         Difference between pressure at surface
         and where mass concentration, q, falls to 1/e of q(p_surface)
-        default: 0.22*p_surface
+        default: 0.22*p_surface_earth
     :param tau_surface: float, optional.
         The value of optical depth at the surface.
         default: 4
+    :param p_surface: float, optional.
+        Pressure value at the surface of the planet (Pa)
+        default: p_surface_earth = 101320 Pa
     :param k: float, optional.
         Absorption coefficient for gas, units = m^2/kg
         default: 1
     """
-    alpha = get_exponential_alpha(p_width)
+    alpha = get_exponential_alpha(p_width, p_surface)
     coef = tau_surface / (np.exp(alpha * p_surface) - 1)
 
     def tau_func_sympy(p, coef, alpha):
@@ -137,7 +141,8 @@ def exponential(p, p_width=0.22 * p_surface, tau_surface=4, k=1):
     return q, tau, tau_func_sympy, [coef, alpha]
 
 
-def peak_in_atmosphere(p, p_width=10000, p_max=50000, tau_surface=4, k=1):
+def peak_in_atmosphere(p, p_width=10000, p_max=50000, tau_surface=4,
+                       p_surface=p_surface_earth, k=1):
     """
     Mass concentration, q, is peaked at p_max and falls off away from this as exp(-alpha|p-p_max|)
     either side.
@@ -154,6 +159,9 @@ def peak_in_atmosphere(p, p_width=10000, p_max=50000, tau_surface=4, k=1):
     :param tau_surface: float, optional.
         The value of optical depth at the surface.
         default: 4
+    :param p_surface: float, optional.
+        Pressure value at the surface of the planet (Pa)
+        default: p_surface_earth = 101320 Pa
     :param k: float, optional.
         Absorption coefficient for gas, units = m^2/kg
         default: 1
@@ -200,8 +208,9 @@ def peak_in_atmosphere(p, p_width=10000, p_max=50000, tau_surface=4, k=1):
     return q, tau, tau_func_sympy, [coef, alpha, p_max]
 
 
-def scale_height_and_peak_in_atmosphere(p, p_width1=0.7788 * p_surface, tau_surface1=4,
-                                        p_width2=10000, p_max2=50000, tau_surface2=4, k=1):
+def scale_height_and_peak_in_atmosphere(p, p_width1=0.7788 * p_surface_earth, tau_surface1=4,
+                                        p_width2=10000, p_max2=50000, tau_surface2=4,
+                                        p_surface=p_surface_earth, k=1):
     """
     Combination of scale_height and peak_in_atmosphere functions.
 
@@ -210,7 +219,7 @@ def scale_height_and_peak_in_atmosphere(p, p_width1=0.7788 * p_surface, tau_surf
     :param p_width1: float, optional.
         Difference between pressure at surface
         and where mass concentration, q1, falls to 1/e of q1(p_surface)
-        default: 0.22*p_surface
+        default: 0.22*p_surface_earth
     :param tau_surface1: float, optional, scale_height arg.
         The value of optical depth at the surface due to scale_height.
         default: 4
@@ -224,11 +233,14 @@ def scale_height_and_peak_in_atmosphere(p, p_width1=0.7788 * p_surface, tau_surf
     :param tau_surface2: float, optional, peak_in_atmosphere arg.
         The value of optical depth at the surface due to peak_in_atmosphere.
         default: 4
+    :param p_surface: float, optional.
+        Pressure value at the surface of the planet (Pa)
+        default: p_surface_earth = 101320 Pa
     :param k: float, optional.
         Absorption coefficient for gas, units = m^2/kg
         default: 1
     """
-    alpha1 = get_scale_height_alpha(p_width1)
+    alpha1 = get_scale_height_alpha(p_width1, p_surface)
     alpha2 = get_exponential_alpha(p_width2, p_max2)
     coef2 = tau_surface2 / (2 - np.exp(-alpha2 * p_max2) - np.exp(alpha2 * (p_max2 - p_surface)))
 

@@ -437,12 +437,6 @@ class RealGas(Atmosphere):
             log_p_final = np.concatenate((log_p_final[:1], log_p_final[0] - cum_diff))
             self.nz = len(log_p_final)
         else:
-            # log_p_0 = log_p_array[0]
-            # log_p_1 = log_p_0 - min_log_p_spacing
-            # log_p_n = log_p_array[-1]
-            # alpha = np.log(log_p_0 - log_p_1 + 1) / np.log(log_p_0 + 1 - log_p_n) / (1-self.nz)
-            # beta = np.exp((np.log(log_p_0 - log_p_1 + 1) / alpha))
-            # log_p_final = log_p_0 + 1 - beta ** (alpha * np.arange(self.nz + 1))
             # cover all pressures in manner that log spacing between pressure levels is smaller
             # near the surface
             alpha = np.log10(log_p_array[0] - log_p_array[-1] + 1) / (self.nz - 1)

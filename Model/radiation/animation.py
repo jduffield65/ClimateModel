@@ -163,6 +163,7 @@ class Animate:
             else:
                 fig, (self.plot2_info['axColor'], self.plot2_info['axTemp']) = \
                     plt.subplots(2, 1, sharex=True, figsize=(6, 8), gridspec_kw={'height_ratios': [3, 1]})
+                axs = None
             self.plot2_info['fig'] = fig
             ax = None
         else:
@@ -188,7 +189,7 @@ class Animate:
         self.ax_lims['p'] = (self.atmos.p_toa, self.atmos.p_surface)
         if self.compos_plot is not None:
             if self.q_array is None:
-                compos_min = 0
+                compos_min = -0.1
             else:
                 # log axis if using q hence can't be zero min axes
                 compos_min = min(min(i for v in self.compos_plot[key] for i in v[v > 0])
@@ -204,14 +205,14 @@ class Animate:
 
     def get_plot_labels(self):
         if self.T_eqb is not None:
-            if self.correct_solution and not self.grey_world.sw_tau_is_zero:
-                Teqb_label = r'Radiative Equilibrium, $\tau_{sw}\neq 0$'
+            if self.correct_solution and not self.atmos.sw_tau_is_zero:
+                T_eqb_label = r'Radiative Equilibrium, $\tau_{sw}\neq 0$'
                 Tcurrent_label = r'Current, $\tau_{sw}\neq0$'
             elif self.correct_solution:
-                Teqb_label = r'Radiative Equilibrium, $\tau_{sw}=0$'
+                T_eqb_label = r'Radiative Equilibrium, $\tau_{sw}=0$'
                 Tcurrent_label = r'Current, $\tau_{sw}=0$'
             else:
-                Teqb_label = r'Radiative Equilibrium, $\tau_{sw}=0$ (Wrong)'
+                T_eqb_label = r'Radiative Equilibrium, $\tau_{sw}=0$ (Wrong)'
                 Tcurrent_label = r'Current, $\tau_{sw}\neq0$'
         else:
             T_eqb_label = 'Final'
@@ -321,8 +322,8 @@ class Animate:
         if self.log_axis:
             self.plot2_info['axColor'].set_yscale('log')
         self.plot2_info['axColor'].set_xticks(self.atmos.latitude)
+        self.plot2_info['axTemp'].plot(self.atmos.latitude, self.T_plot[0][0], label='initial', linestyle='dotted')
         self.plot2_info['axTemp'].plot(self.atmos.latitude, self.T_plot[i][0], label='current')
-        self.plot2_info['axTemp'].plot(self.atmos.latitude, self.T_plot[0][0], label='initial')
         self.plot2_info['axTemp'].set_ylim(self.ax_lims['T'])
         self.plot2_info['axTemp'].set_xlabel('Latitude')
         self.plot2_info['axTemp'].set_ylabel('Surface Temperature / K')
