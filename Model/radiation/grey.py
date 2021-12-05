@@ -73,7 +73,6 @@ class GreyGas(Atmosphere):
         # self.F_stellar_constant = F_stellar_constant
         # # net total down sw_flux with no atmosphere
         # self.solar_latitude_factor = GreyGas.latitudinal_solar_distribution(self.latitude)
-        self.F_sw0 = (1 - self.albedo) * self.solar_latitude_factor * self.F_stellar_constant / 4
         # self.T0 = self.get_isothermal_temp()
         self.tau_lw_func = tau_lw_func
         self.tau_lw_func_args = tuple(tau_lw_func_args)
@@ -90,8 +89,15 @@ class GreyGas(Atmosphere):
         if not self.sw_tau_is_zero:
             self.tau_sw_interface = self.tau_sw_func(self.p_interface, *self.tau_sw_func_args)[1]
             self.q_sw, self.tau_sw, _, _ = self.tau_sw_func(self.p, *self.tau_sw_func_args)
+            # albedo mod to correct missing exponetial of tau_surface term
+            self.albedo_mod = self.albedo * np.exp(-self.tau_sw_interface[0])
+            if self.ny == 1:
+                self.albedo_mod = self.albedo_mod[0]   # make float
+        else:
+            self.albedo_mod = self.albedo
         self.dtau = np.abs(self.tau_interface[1:, :] - self.tau_interface[:-1, :])
         '''radiation fluxes start off at isothermal values'''
+        self.F_sw0 = (1 - self.albedo_mod) * self.solar_latitude_factor * self.F_stellar_constant / 4
         # Initial condition such that energy balance with short wave radiation.
         self.up_lw_flux = np.ones((self.tau_interface.shape[0], self.tau_interface.shape[1])) * self.F_sw0
         # down_lw_flux = 0 at top of atmosphere.
@@ -257,7 +263,7 @@ class GreyGas(Atmosphere):
                 sigma * np.power(self.T, 4) * (1 - np.exp(-dtau)))'''
         # use for loop because use updated values in next value of i so converge quicker.
         # set top of atmosphere level everytime to take account of any changing albedo or stellar_constant
-        self.up_lw_flux[-1, :] = (1 - self.albedo) * self.solar_latitude_factor * self.F_stellar_constant / 4
+        self.up_lw_flux[-1, :] = (1 - self.albedo_mod) * self.solar_latitude_factor * self.F_stellar_constant / 4
         for i in range(self.T.shape[0] - 1, -1, -1):
             # think up_flux routine is a bit questionable, heating is from below so from physical point of view,
             # should compute i+1 flux from i flux with i+1/2 temperature.
@@ -280,7 +286,7 @@ class GreyGas(Atmosphere):
             If Isothermal, fluxes are those in absence of atmosphere.
         """
         up_sw_flux = np.ones((self.tau_interface.shape[0], self.tau_interface.shape[1])) * \
-                     self.albedo * self.solar_latitude_factor * self.F_stellar_constant / 4
+                     self.albedo_mod * self.solar_latitude_factor * self.F_stellar_constant / 4
         down_sw_flux = np.ones((self.tau_interface.shape[0], self.tau_interface.shape[1])) * \
                        self.solar_latitude_factor * self.F_stellar_constant / 4
         if not self.sw_tau_is_zero and isothermal is False:
@@ -424,7 +430,7 @@ class GreyGas(Atmosphere):
 
         if not self.sw_tau_is_zero and correct_solution:
             '''Find analytic solution with short wave tau'''
-            swEqb = ShortWavelengthEqbCalc(self.F_stellar_constant, self.albedo,
+            swEqb = ShortWavelengthEqbCalc(self.F_stellar_constant, self.albedo_mod,
                                            self.tau_lw_func_args, self.tau_sw_func_args,
                                            self.tau_lw_func, self.tau_sw_func)
             up_lw_flux_eqb = swEqb.up_lw_flux(self.tau_sw_interface)
@@ -439,7 +445,7 @@ class GreyGas(Atmosphere):
             down_lw_flux_eqb = 0.5 * self.F_sw0 * self.tau_interface
             # Temperature at centre
             T_eqb = np.power((self.F_sw0 / (2 * sigma)) * (1 + self.tau), 1 / 4)
-            up_sw_flux_eqb = np.ones(np.shape(up_lw_flux_eqb)) * self.albedo * self.F_stellar_constant / 4
+            up_sw_flux_eqb = np.ones(np.shape(up_lw_flux_eqb)) * self.albedo_mod * self.F_stellar_constant / 4
             down_sw_flux_eqb = np.ones(np.shape(up_lw_flux_eqb)) * self.F_stellar_constant / 4
         if convective_adjust:
             T_eqb = convective_adjustment(self.p[:, 0], T_eqb)
@@ -501,7 +507,7 @@ class GreyGas(Atmosphere):
 
 class ShortWavelengthEqbCalc:
 
-    def __init__(self, F_stellar_const, albedo, lw_args, sw_args,
+    def __init__(self, F_stellar_const, albedo_mod, lw_args, sw_args,
                  tau1=od.exponential, tau2=od.exponential):
         """
         This calculates the analytical equilibrium temperature and flux profiles for an atmosphere containing
@@ -509,8 +515,8 @@ class ShortWavelengthEqbCalc:
 
         :param F_stellar_const: float.
             Flux density at surface of planet. Units = W/m^2;
-        :param albedo: float.
-            Fraction of incoming short wave radiation reflected back to space.
+        :param albedo_mod: float.
+            Fraction of incoming short wave radiation reflected back to space. Multiplied by exp(-tau_sw_surface).
         :param lw_args: tuple.
             args needed to compute long wave optical depth from the function tau1.
         :param sw_args: tuple.
@@ -523,14 +529,15 @@ class ShortWavelengthEqbCalc:
             default: od.exponential
 
         """
-        if np.size(albedo) > 1:
+        if np.size(albedo_mod) > 1:
             raise ValueError('Must provide a single latitude bin to get analytical solution')
         _, _, tau_lw, self.lw_params = tau1(1, *lw_args)
         _, _, tau_sw, self.sw_params = tau2(1, *sw_args)
         self.all_params = self.lw_params + self.sw_params
         self.power_params = [False, True, False, True]  # use these to cancel values before integrating
         self.F_stellar_const = F_stellar_const
-        self.albedo = albedo
+        self.tau_sw_surface = sw_args[1]  # 2nd argument is always tau surface for exponential optical depth
+        self.albedo_mod = albedo_mod
         self.t1 = symbols('tau1')
         self.t2 = symbols('tau2')
         self.tau1_diff_tau2_symbol = self.get_tau1_diff_tau2(tau_lw, tau_sw)[2]
@@ -592,25 +599,25 @@ class ShortWavelengthEqbCalc:
         tau1_diff_tau2_symbol = self.tau1_diff_tau2_symbol.subs(power_variable_values)
         tau1_diff_tau2_symbol = self.set_power_to_int(tau1_diff_tau2_symbol)
         tau1_diff_tau2_onlyt2symbol = tau1_diff_tau2_symbol.subs(non_power_variable_values)
-        func_to_int = tau1_diff_tau2_symbol * (exp(-self.t2) - self.albedo * exp(self.t2))
+        func_to_int = tau1_diff_tau2_symbol * (exp(-self.t2) - self.albedo_mod * exp(self.t2))
         integ_sol_symbol = integrate(func_to_int, self.t2)
         integ_sol_onlyt2symbol = integ_sol_symbol.subs(non_power_variable_values)
         integ_sol = lambdify(self.t2, integ_sol_onlyt2symbol, "numpy")
-        integ_const = 1 - self.albedo - integ_sol(0)  # constant found by satisfying down_lw_flux(0) = 0
+        integ_const = 1 - self.albedo_mod - integ_sol(0)  # constant found by satisfying down_lw_flux(0) = 0
         return integ_sol, integ_sol_onlyt2symbol, integ_const, tau1_diff_tau2_onlyt2symbol
 
     def get_physical_values(self):
         """Once tau1 is found as a function of tau2 and integral is performed, we can get the fluxes
         and temperature as a function of tau2, the short wave optical thickness.
         All returns are functions of short wave optical thickness, tau2"""
-        up_sw_flux = self.albedo * self.F_stellar_const / 4 * exp(self.t2)
+        up_sw_flux = self.albedo_mod * self.F_stellar_const / 4 * exp(self.t2)
         down_sw_flux = self.F_stellar_const / 4 * exp(-self.t2)
         sigmaT4 = self.F_stellar_const / 8 * (
-                (exp(-self.t2) + self.albedo * exp(self.t2)) / self.tau1_diff_tau2_onlyt2symbol +
+                (exp(-self.t2) + self.albedo_mod * exp(self.t2)) / self.tau1_diff_tau2_onlyt2symbol +
                 self.integ_sol_onlyt2symbol + self.integ_const)
         down_lw_flux = sigmaT4 - F_sun / 8 * (
-                (exp(-self.t2) + self.albedo * exp(self.t2)) / self.tau1_diff_tau2_onlyt2symbol +
-                exp(-self.t2) - self.albedo * exp(self.t2))
+                (exp(-self.t2) + self.albedo_mod * exp(self.t2)) / self.tau1_diff_tau2_onlyt2symbol +
+                exp(-self.t2) - self.albedo_mod * exp(self.t2))
         up_lw_flux = down_lw_flux + down_sw_flux - up_sw_flux  # ensure net flux is zero
         T = (sigmaT4 / sigma) ** 0.25
         up_sw_flux = lambdify(self.t2, up_sw_flux, "numpy")

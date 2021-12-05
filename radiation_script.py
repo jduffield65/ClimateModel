@@ -10,7 +10,7 @@ from Model.radiation.animation import Animate
 
 matplotlib.use('TkAgg')  # To make plot pop out
 
-ny = 30
+ny = 1
 conv_adjust = False
 '''Analytic solution with short wave'''
 # p_width_lw = 100000
@@ -30,26 +30,26 @@ conv_adjust = False
 #                                           tau_sw_func=od.peak_in_atmosphere,
 #                                           tau_sw_func_args=[10000, 2000, 0.05])
 '''With thermosphere'''
-# grey_world = Model.radiation.grey.GreyGas(nz='auto', ny=ny, tau_lw_func=od.scale_height_and_peak_in_atmosphere,
-#                                           tau_lw_func_args=[51000, 4, 100, 600, 0.1],
-#                                           tau_sw_func=od.scale_height_and_peak_in_atmosphere,
-#                                           tau_sw_func_args=[p_surface_earth, 0.12, 100, 20, 0.002])
+grey_world = Model.radiation.grey.GreyGas(nz='auto', ny=ny, tau_lw_func=od.scale_height_and_peak_in_atmosphere,
+                                          tau_lw_func_args=[51000, 4, 100, 600, 0.1],
+                                          tau_sw_func=od.scale_height_and_peak_in_atmosphere,
+                                          tau_sw_func_args=[p_surface_earth, 0.12, 100, 20, 0.002])
 
 """ Approach to equilibrium"""
-# if grey_world.ny == 1:
-#     up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, \
-#     correct_solution = grey_world.equilibrium_sol(convective_adjust=conv_adjust)
-#     if correct_solution:
-#         grey_world.plot_eqb(up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb)
-# # Get temperature results until net_flux is zero everywhere i.e. equilibrium
-# net_flux_thresh = 1e-1
-# data = grey_world.evolve_to_equilibrium(flux_thresh=net_flux_thresh, convective_adjust=conv_adjust)
-# if grey_world.ny == 1:
-#     anim = Animate(grey_world, data['T'], data['t'], T_eqb, correct_solution).anim
-# else:
-#     anim = Animate(grey_world, data['T'], data['t'], nPlotFrames=30).anim
-#     #anim = grey_world.plot_animate(data['T'], data['t'], nPlotFrames=30)
-# plt.show()
+if grey_world.ny == 1:
+    up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb, \
+    correct_solution = grey_world.equilibrium_sol(convective_adjust=conv_adjust)
+    if correct_solution:
+        grey_world.plot_eqb(up_flux_eqb, down_flux_eqb, T_eqb, up_sw_flux_eqb, down_sw_flux_eqb)
+# Get temperature results until net_flux is zero everywhere i.e. equilibrium
+net_flux_thresh = 1e-1
+data = grey_world.evolve_to_equilibrium(flux_thresh=net_flux_thresh, convective_adjust=conv_adjust)
+if grey_world.ny == 1:
+    anim = Animate(grey_world, data['T'], data['t'], T_eqb, correct_solution).anim
+else:
+    anim = Animate(grey_world, data['T'], data['t'], nPlotFrames=30).anim
+    #anim = grey_world.plot_animate(data['T'], data['t'], nPlotFrames=30)
+plt.show()
 
 """ Evolution with tau"""
 p1 = od.get_exponential_p_width(1e-5)
