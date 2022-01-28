@@ -90,7 +90,7 @@ class GreyGas(Atmosphere):
             self.tau_sw_interface = self.tau_sw_func(self.p_interface, *self.tau_sw_func_args)[1]
             self.q_sw, self.tau_sw, _, _ = self.tau_sw_func(self.p, *self.tau_sw_func_args)
             # albedo mod to correct missing exponetial of tau_surface term
-            self.albedo_mod = self.albedo * np.exp(-self.tau_sw_interface[0])
+            self.albedo_mod = self.albedo * np.exp(-2 * self.tau_sw_interface[0])
             if self.ny == 1:
                 self.albedo_mod = self.albedo_mod[0]   # make float
         else:
