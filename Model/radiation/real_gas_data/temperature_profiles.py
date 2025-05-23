@@ -37,8 +37,21 @@ def fixed_tropopause_temp(p, h_tropopause=19, T_tropopause=205, T_ground=288):
     :param T_ground: temperature of ground (K)
     """
     h_values = np.array([0, h_tropopause, 140]) * 1000
-    T_values = np.array([288, T_tropopause, T_tropopause])
+    T_values = np.array([T_ground, T_tropopause, T_tropopause])
     h = p_altitude_convert(p=p)
+    interp_func = interp1d(h_values, T_values)
+    T = np.zeros_like(p)
+    T[h <= h_values[-1]] = interp_func(h[h <= h_values[-1]])
+    T[h > h_values[-1]] = T_values[-1]
+    return T
+
+
+def two_lapse_temp(p, h_tropopause=10, h_top=20, T_ground=288, lapse_trop=9, lapse_strat=0):
+    h = p_altitude_convert(p=p)
+    h_values = np.array([0, h_tropopause, h_top]) * 1000
+    T_tropopause = T_ground - h_tropopause * lapse_trop
+    T_top = T_tropopause - (h_top - h_tropopause) * lapse_strat
+    T_values = np.array([T_ground, T_tropopause, T_top])
     interp_func = interp1d(h_values, T_values)
     T = np.zeros_like(p)
     T[h <= h_values[-1]] = interp_func(h[h <= h_values[-1]])

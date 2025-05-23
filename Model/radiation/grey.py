@@ -3,7 +3,6 @@ from .convective_adjustment import convective_adjustment
 from .base import Atmosphere, latitudinal_solar_distribution
 import Model.radiation.grey_optical_depth as od
 import numpy as np
-from numba import jit
 from sympy import symbols, lambdify, diff, exp, simplify, sympify, integrate, cancel, Function
 from inspect import signature
 from sympy.solvers import solve

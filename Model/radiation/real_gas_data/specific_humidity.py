@@ -12,8 +12,10 @@ Figure 4 used to convert between altitude and pressure.
 import numpy as np
 from ...constants import p_surface_earth
 from scipy.interpolate import interp1d
+from typing import Union
 
 M_air = 28.97  # molar mass of air in gmol^-1
+temp_kelvin_to_celsius = 273.15
 
 
 def p_altitude_convert(altitude=None, p=None):
@@ -60,7 +62,7 @@ def humidity_from_ppmv(conc_ppmv, molecule_name):
 def ppmv_from_humidity(humidity, molecule_name):
     """
     Given specific humidity (kg / kg),
-     molar concentration in parts per million by volume is returned
+    molar concentration in parts per million by volume is returned
 
     :param humidity: numpy array
     :param molecule_name: string e.g. 'CO2'
@@ -140,19 +142,16 @@ def h2o(p, scale_factor=1):
     q_values = np.array([20000, 2500, 250, 12, 4, 4.3, 4.9, 5.1, 5.7, 5.9, 6, 6.1, 6, 5.8, 5, 4, 2.5, 1])
     # mod_factor = abs(scale_factor - 1) * (h_values[-1] - h_values) / h_values[-1]
     # mod_factor = 1 + np.sign(scale_factor - 1) * mod_factor
-    mod_factor = scale_factor
     if scale_factor == 0:
         q = np.zeros_like(p)
     else:
-        q_values = q_values * mod_factor
-        q_values[q_values > q_values[0]] = q_values[0]  # to keep maxima at surface
         interp_func = interp1d(h_values, np.log10(q_values))
         """interpolate given pressure values"""
         h = p_altitude_convert(p=p)
         q = np.zeros_like(p)
         q[h < h_values.max()] = 10 ** interp_func(h[h < h_values.max()])
         q[q < 0] = 0
-        q = humidity_from_ppmv(q, 'H2O')
+        q = humidity_from_ppmv(q, 'H2O') * scale_factor
     return q
 
 
@@ -181,6 +180,82 @@ def o3(p, scale_factor=1):
         q[q < 0] = 0
         q = humidity_from_ppmv(q, 'O3')
     return q
+
+
+def constant_q(p, q_surface, molecule_name):
+    """
+    gives same humidity everywhere
+
+    :param p: numpy array
+    :param q_surface: surface humidity (ppmv)
+    :param molecule_name: string, molecule considering
+    :return:
+    """
+    q = np.ones_like(p) * q_surface
+    q = humidity_from_ppmv(q, molecule_name.upper())
+    return q
+
+def gradient_q(p, q_sfc, q_upper, h_upper, molecule_name='CO2'):
+    """
+    Returns q with constant gradient in height space, going from q_sfc at the surface and q_upper at h_upper. Remaining constant
+    above this.
+
+    :param p: numpy array
+    :param q_sfc: surface humidity (ppmv)
+    :param q_upper: humidity (ppmv) at h_upper
+    :param h_upper: height (m) where humidity equals q_upper.
+    :param molecule_name: string, molecule considering
+    :return:
+    """
+    h = p_altitude_convert(p=p)
+    q = np.zeros_like(p)
+    q[h >= h_upper] = q_upper
+    q_from_h = lambda x: q_sfc + x * (q_upper - q_sfc) / h_upper
+    q[h < h_upper] = q_from_h(h[h < h_upper])
+    q = humidity_from_ppmv(q, molecule_name.upper())
+    return q
+
+
+def saturation_vapor_pressure(temp: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+    """
+    Computes the saturation vapor pressure, $e_s(T)$, corresponding to a given temperature.
+
+    Uses *Equation 10* in *Bolton 1980*. Valid for $-35^\circ C < T < 35^\circ C$.
+
+    Args:
+        temp: Temperature to compute vapor pressure at. Units: *Kelvin*.
+
+    Returns:
+        Saturation vapor pressure, $e_s(T)$, in units of *Pa*.
+    """
+    # Alternative equation from MATLAB exercise M9.2 in Holdon 2004
+    # return 611 * np.exp(L_v/R_v * (1/temp_kelvin_to_celsius - 1/temp))
+    temp = temp - temp_kelvin_to_celsius  # Convert temperature in kelvin to celsius, as celsius used for this formula.
+    # if np.abs(np.asarray(temp)).max() > 35:
+    #     warnings.warn('This formula is only valid for $-35^\circ C < T < 35^\circ C$\n'
+    #                   'At least one temperature given is outside this range.')
+    # Multiply by 100 below to convert from hPa to Pa.
+    return 611.2 * np.exp(17.67 * temp / (temp + 243.5))
+
+
+def constant_rh(p, temp_func, rh=0.7, h_upper=None, molecule_name='H2O'):
+    """
+    Returns q with relative humidity constant throughout atmosphere.
+
+    :param p: numpy array, pressure in Pa
+    :param temp_func: Temperature function with pressure in pa as only argument
+    :param rh: Relative humidity
+    :param h_upper: height in m above which rh set to zero
+    :param molecule_name: Molecule to use for molecular mass purposes
+    :return:
+    """
+    temp_profile = temp_func(p)
+    vap_pressure = rh * saturation_vapor_pressure(temp_profile)
+    conc_ppmv = vap_pressure / p * 10**6
+    if h_upper is not None:
+        h = p_altitude_convert(p=p)
+        conc_ppmv[h >= h_upper] = 0
+    return humidity_from_ppmv(conc_ppmv, molecule_name.upper())
 
 
 # list hitran id and molecular mass in gmol^-1 for some molecules as well as humidity functions

@@ -62,6 +62,27 @@ def get_absorption_coef(p, T, nu, absorb_coef_dict):
     return absorb_coef_all_nu[:, nu_dict_ind]
 
 
+def load_absorption_coef(p, T, wavenumber, molecule_name):
+    """
+    This loads the absorption coefficient at the subset of pressures and temperatures indicated by p, T and wavenumber.
+
+    :param p: numpy array [np_crop]
+    :param T: numpy array [np_crop]
+    :param wavenumber: numpy array [n_wavenumber]
+    :param molecule_name: string
+    :return:
+        absorb_coef [np_crop x n_wavenumber]
+    """
+    absorb_coef = np.zeros((np.size(p), np.size(wavenumber)))
+    absorb_coef_dict = np.load(LookupTableFolder + molecule_name + '.npy',
+                               allow_pickle='TRUE').item()
+    update_wavenumber_ind = np.where(np.logical_and(wavenumber >= absorb_coef_dict['nu'].min(),
+                                                    wavenumber <= absorb_coef_dict['nu'].max()))[0]
+    wavenumber_crop = wavenumber[update_wavenumber_ind]
+    absorb_coef[:, update_wavenumber_ind] = get_absorption_coef(p, T, wavenumber_crop, absorb_coef_dict)
+    return absorb_coef
+
+
 def optical_depth(p, T, wavenumber, molecule_names, q_funcs, q_funcs_args):
     """
     Performs integral of dtau/dp = kq/g over pressure to give optical depth at each pressure level.
@@ -86,13 +107,14 @@ def optical_depth(p, T, wavenumber, molecule_names, q_funcs, q_funcs_args):
     tau_integrand = np.zeros((np.size(p), np.size(wavenumber)))
 
     for molecule_name in molecule_names:
-        absorb_coef = np.zeros_like(tau_integrand)
-        absorb_coef_dict = np.load(LookupTableFolder + molecule_name + '.npy',
-                                   allow_pickle='TRUE').item()
-        update_wavenumber_ind = np.where(np.logical_and(wavenumber >= absorb_coef_dict['nu'].min(),
-                                                        wavenumber <= absorb_coef_dict['nu'].max()))[0]
-        wavenumber_crop = wavenumber[update_wavenumber_ind]
-        absorb_coef[:, update_wavenumber_ind] = get_absorption_coef(p, T, wavenumber_crop, absorb_coef_dict)
+        absorb_coef = load_absorption_coef(p, T, wavenumber, molecule_name)
+        # absorb_coef = np.zeros_like(tau_integrand)
+        # absorb_coef_dict = np.load(LookupTableFolder + molecule_name + '.npy',
+        #                            allow_pickle='TRUE').item()
+        # update_wavenumber_ind = np.where(np.logical_and(wavenumber >= absorb_coef_dict['nu'].min(),
+        #                                                 wavenumber <= absorb_coef_dict['nu'].max()))[0]
+        # wavenumber_crop = wavenumber[update_wavenumber_ind]
+        # absorb_coef[:, update_wavenumber_ind] = get_absorption_coef(p, T, wavenumber_crop, absorb_coef_dict)
         q = q_funcs[molecule_name](p, *q_funcs_args[molecule_name])
         tau_integrand += absorb_coef * q.reshape(-1, 1)
     tau = np.zeros_like(tau_integrand)
@@ -129,6 +151,36 @@ def transmission(p1, p2, p_all, nu_band, delta_nu_band, nu_all, tau):
     tau_p2 = np.expand_dims(tau[p2_ind, :], axis=0)
     tau_p2 = np.repeat(tau_p2, len(p1), axis=0)
     integrand = np.exp(tau_p1 - tau_p2)
+    return np.trapz(integrand, nu_band, axis=2) / delta_nu_band
+
+
+def dtransmission_dq(p1, p2, p_all, nu_band, delta_nu_band, nu_all, tau, absorption_coef):
+    """
+    Computes the rate of change of transmission function with specific concentration of a chosen molecule
+    for a given wavenumber band.
+
+    :param p1: numpy array [np1]
+    :param p2: numpy array [np2]
+    :param p_all: numpy array [np]
+    :param nu_band: numpy array [n_band]
+    :param delta_nu_band: float
+    :param nu_all: numpy array [n_nu]
+    :param tau: numpy array [np x n_nu]
+    :param absorption_coef: numpy array [n_nu] absorption spectrum of single molecule.
+    :return: numpy array [np1 x np2]
+    """
+    p1_ind = np.where(p_all.reshape(-1, 1) == p1)[0]
+    p2_ind = np.where(p_all.reshape(-1, 1) == p2)[0]
+    nu_ind = np.where(nu_all.reshape(-1, 1) == nu_band)[0]
+    if len(p1_ind) == 0 or len(p2_ind) == 0 or len(nu_ind) == 0:
+        raise ValueError('p1, p2 or nu have no values in p_all or nu_all')
+    tau = tau[:, nu_ind]
+    absorption_coef = absorption_coef[nu_ind]
+    tau_p1 = np.expand_dims(tau[p1_ind, :], axis=1)
+    tau_p1 = np.repeat(tau_p1, len(p2), axis=1)
+    tau_p2 = np.expand_dims(tau[p2_ind, :], axis=0)
+    tau_p2 = np.repeat(tau_p2, len(p1), axis=0)
+    integrand = (p1-p2) * absorption_coef * np.exp(tau_p1 - tau_p2) / g
     return np.trapz(integrand, nu_band, axis=2) / delta_nu_band
 
 
@@ -199,8 +251,9 @@ class RealGas(Atmosphere):
             if T_func is not None:
                 T_g = T_func(self.p_surface)
                 self.T_g = T_g
-            # assume some greenhouse warming (Guess of ground temperature. Needed to work out pressure grid)
-            self.T_g = self.T0 + 20
+            else:
+                # assume some greenhouse warming (Guess of ground temperature. Needed to work out pressure grid)
+                self.T_g = self.T0 + 20
         else:
             self.T_g = T_g
         self.molecule_names = molecule_names
@@ -573,7 +626,7 @@ class RealGas(Atmosphere):
             p_integ_range_down = p_integ_range_down[:-1]  # get ready for next level
         return integral_up, integral_down
 
-    def get_flux(self):
+    def get_flux(self, include_olr_breakdown=False):
         """
         Calculates up and down flux arrays at each pressure and wavenumber [nz x n_nu_bands]
         """
@@ -587,6 +640,8 @@ class RealGas(Atmosphere):
         down_flux = np.ones((self.nz, self.n_nu_bands)) * \
                     np.pi * B_wavenumber(self.nu_bands['centre'], self.star['T']) * \
                     self.star['R'] ** 2 / self.star['star_planet_dist'] ** 2 * (1 - self.albedo) / 4
+        if include_olr_breakdown:
+            olr_cont = {key: np.zeros(self.n_nu_bands) for key in ['surface', 'atmos']}
         for j in range(self.n_nu_bands):
             # Apply exponential decay of surface flux at lower pressures
             up_flux[:, j] = up_flux[:, j] * transmission(self.p_interface[:, 0], self.p_interface[-1:, 0],
@@ -598,13 +653,20 @@ class RealGas(Atmosphere):
                                                              self.p_interface[:, 0], self.nu_bands['range'][j],
                                                              self.nu_bands['delta'][j], self.nu,
                                                              self.tau_interface).reshape(-1)
+            if include_olr_breakdown:
+                olr_cont['surface'][j] = up_flux[0, j]   # surface contribution to OLR
             if not self.nu_bands['sw'][j]:
                 # for wavenumbers in long wave region, need to consider emission by atmosphere itself
                 # atmosphere does not emit in short wave region hence neglect integral
                 integral_up, integral_down = self.flux_integrals(j, T_interface)
                 up_flux[:, j] += integral_up
                 down_flux[:, j] += integral_down
-        return up_flux, down_flux
+                if include_olr_breakdown:
+                    olr_cont['atmos'][j] = integral_up[0] # atmosphere contribution to OLR
+        if include_olr_breakdown:
+            return up_flux, down_flux, olr_cont
+        else:
+            return up_flux, down_flux
 
     def take_time_step(self, t, T_initial=None, changing_tau=False, convective_adjust=False,
                        net_flux_thresh=1e-7, net_flux_percentile=95, conv_thresh=1e-5, conv_t_multiplier=5):
