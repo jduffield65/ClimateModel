@@ -343,7 +343,7 @@ def make_table(molecule_name, p_array=table_p_values, T_array=table_T_values,
     # read_dictionary = np.load(output_file, allow_pickle='TRUE').item()
 
 
-def plot_absorption_coefficient(molecule_name, p_plot, T_plot, ax=None):
+def plot_absorption_coefficient(molecule_name, p_plot, T_plot, ax=None, do_plot=True):
     """
     Plot absorption coefficient vs wavenumber for a specific pressure and temperature
 
@@ -358,12 +358,16 @@ def plot_absorption_coefficient(molecule_name, p_plot, T_plot, ax=None):
     absorption_coef = dict['absorption_coef'][p_index, T_index]
     p_actual_plot = int(round(dict['p'][p_index]))
     T_actual_plot = int(round(dict['T'][T_index]))
-    if ax is None:
-        fig, ax = plt.subplots(1, 1)
-    ax.plot(dict['nu'], absorption_coef)
-    ax.set_yscale('log')
-    ax.set_ylim((10 ** -10, max(10 ** 6, absorption_coef.max())))
-    ax.set_xlim(dict['nu'].min(), dict['nu'][np.where(absorption_coef > 10**-10)[0][-1]])
-    ax.set_xlabel('Wavenumber cm$^{-1}$')
-    ax.set_ylabel('Absorption coefficient (m$^2$/kg)')
-    ax.set_title(molecule_name + ' at (' + str(T_actual_plot) + ' K, ' + str(p_actual_plot) + ' Pa), air-broadened')
+    if do_plot:
+        if ax is None:
+            fig, ax = plt.subplots(1, 1)
+        ax.plot(dict['nu'], absorption_coef)
+        ax.set_yscale('log')
+        ax.set_ylim((10 ** -10, max(10 ** 6, absorption_coef.max())))
+        ax.set_xlim(dict['nu'].min(), dict['nu'][np.where(absorption_coef > 10**-10)[0][-1]])
+        ax.set_xlabel('Wavenumber cm$^{-1}$')
+        ax.set_ylabel('Absorption coefficient (m$^2$/kg)')
+        ax.set_title(molecule_name + ' at (' + str(T_actual_plot) + ' K, ' + str(p_actual_plot) + ' Pa), air-broadened')
+        return fig, ax
+    else:
+        return dict['nu'], absorption_coef
