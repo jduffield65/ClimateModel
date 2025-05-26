@@ -262,4 +262,5 @@ def constant_rh(p, temp_func, rh=0.7, h_upper=None, molecule_name='H2O'):
 molecules = {'H2O': {'hitran_id': 1, 'M': 18, 'q': h2o, 'q_args': (1,)},
              'CO2': {'hitran_id': 2, 'M': 44, 'q': co2, 'q_args': (370, 80000)},
              'O3': {'hitran_id': 3, 'M': 48, 'q': o3, 'q_args': (1,)},
-             'CH4': {'hitran_id': 6, 'M': 16, 'q': ch4, 'q_args': (1,)}}
+             'CH4': {'hitran_id': 6, 'M': 16, 'q': ch4, 'q_args': (1,)},
+             'CFC12': {'hitrad_id': 10, 'M': 120.91, 'q': o3, 'q_args': (1,)}}
